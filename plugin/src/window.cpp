@@ -21,4 +21,15 @@ std::optional<std::uintptr_t> SelectWindow(const std::vector<WindowCandidate>& c
     return firstMatch;
 }
 
+std::optional<std::uintptr_t> SelectWindowByTitle(const std::vector<WindowCandidate>& candidates,
+                                                   std::wstring_view wantedClassName,
+                                                   std::wstring_view wantedTitle) {
+    for (const auto& candidate : candidates) {
+        if (candidate.className == wantedClassName && candidate.title == wantedTitle) {
+            return candidate.handle;
+        }
+    }
+    return std::nullopt;
+}
+
 }

@@ -3,10 +3,10 @@
 #include <windows.h>
 
 #include <atomic>
-#include <unordered_map>
 
 #include "diagnostics/log.hpp"
 #include "plugin/window.hpp"
+#include "plugin/window_enum.hpp"
 
 namespace plugin {
 
@@ -25,53 +25,16 @@ constexpr wchar_t kMainWindowClass[] = L"PotPlayer64";
 // cause a query against the wrong (recycled) window.
 std::atomic<HWND> g_mainWindow{nullptr};
 
-struct EnumState {
-    DWORD processId;
-    std::vector<WindowCandidate> candidates;
-    // SelectWindow only ever sees the narrowed integer form of a handle
-    // (plugin/window.hpp stays <windows.h>-free); this recovers the real
-    // HWND for whichever candidate it picks.
-    std::unordered_map<std::uintptr_t, HWND> handlesByValue;
-};
-
-BOOL CALLBACK EnumWindowsCallback(HWND hwnd, LPARAM lParam) {
-    auto& state = *reinterpret_cast<EnumState*>(lParam);
-
-    DWORD ownerProcessId = 0;
-    GetWindowThreadProcessId(hwnd, &ownerProcessId);
-    if (ownerProcessId != state.processId) {
-        return TRUE;
-    }
-
-    wchar_t className[256];
-    const int length = GetClassNameW(hwnd, className, static_cast<int>(std::size(className)));
-    if (length <= 0) {
-        return TRUE;
-    }
-
-    const auto handleValue = reinterpret_cast<std::uintptr_t>(hwnd);
-    state.candidates.push_back(WindowCandidate{
-        handleValue, std::wstring(className, static_cast<std::size_t>(length)), IsWindowVisible(hwnd) != FALSE});
-    state.handlesByValue.emplace(handleValue, hwnd);
-
-    return TRUE;
-}
-
 // Enumerates every top-level window owned by our own process (never anyone
 // else's, per PTS-009's "do not hardcode a window handle" design note) and
 // hands the result to SelectWindow to pick the live PotPlayer64 window.
 HWND FindMainWindow() {
-    EnumState state{GetCurrentProcessId(), {}, {}};
-    if (!EnumWindows(&EnumWindowsCallback, reinterpret_cast<LPARAM>(&state))) {
-        LOG_WARN("plugin: EnumWindows failed while looking for the main window, gle={}", GetLastError());
-        return nullptr;
-    }
-
-    const auto selected = SelectWindow(state.candidates, kMainWindowClass);
+    const auto enumerated = EnumerateOwnProcessWindows();
+    const auto selected = SelectWindow(enumerated.candidates, kMainWindowClass);
     if (!selected) {
         return nullptr;
     }
-    return state.handlesByValue.at(*selected);
+    return enumerated.handlesByValue.at(*selected);
 }
 
 // Re-resolves by class whenever the cached handle is unset or has gone
@@ -114,6 +77,10 @@ int GetStatus() {
 
 bool IsFileOpen() {
     return GetDurationMs() > 0;
+}
+
+std::uintptr_t GetMainWindowHandle() {
+    return reinterpret_cast<std::uintptr_t>(ResolveMainWindow());
 }
 
 }  // namespace plugin

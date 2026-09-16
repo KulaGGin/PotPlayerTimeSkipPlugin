@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "core/core.hpp"
 
 // Live playback-state queries against PotPlayer's own main window (PTS-009).
@@ -26,5 +28,11 @@ int GetStatus();
 // callers tell that state apart from genuinely sitting at 0:00 in an open
 // file, where duration is > 0.
 bool IsFileOpen();
+
+// Narrowed HWND of PotPlayer's own main window, resolved and cached the same
+// way the queries above are. Returns 0 if it can't currently be found.
+// Exposed for PTS-010's Skip Setup dialog, which needs the real handle to
+// post its open command to.
+std::uintptr_t GetMainWindowHandle();
 
 }

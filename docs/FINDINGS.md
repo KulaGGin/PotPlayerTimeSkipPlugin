@@ -118,11 +118,14 @@ complete Delete round trip were driven purely with
 script — no synthesized keystrokes except the initial `Ctrl+\` used to open
 Skip Setup.
 
-### Skip Setup — `#32770`, title `Skip Setup`, opened with `Ctrl+\`
+### Skip Setup — `#32770`, title `Skip Setup`
 
-`Ctrl+\` is the only entry point that doesn't require brute-forcing
-PotPlayer's `WM_COMMAND` menu IDs, and it requires PotPlayer to be the
-foreground window.
+**Superseded by PTS-010 (see section 7 below):** the cross-process prototype
+used `Ctrl+\`, PotPlayer's own accelerator, because it required no
+foreground-stealing prep beyond making PotPlayer the foreground window
+first. In-process, that requirement disappears: PTS-010 posts the real
+`WM_COMMAND` id (`10240`) straight to the main window instead, with no
+synthesized keystroke and no foreground change of any kind.
 
 | id | class | what |
 |---|---|---|
@@ -375,3 +378,70 @@ what the user happens to have focused.
 `PotShadowWnd` top-level window. Moving a dialog off-screen (to drive it
 without it being visible) must move its `PotShadowWnd` too, or a shadow
 rectangle is left floating over the video with nothing inside it.
+
+## 7. Opening Skip Setup in-process (PTS-010)
+
+**Measured (static resource analysis, no live PotPlayer run needed):**
+PotPlayer's `WM_COMMAND` id for opening Skip Setup is **`10240`**. Found by
+loading `PotPlayer64.dll` with `LoadLibraryExW(..., LOAD_LIBRARY_AS_DATAFILE)`
+(no code from the DLL ever executes) and walking its `RT_MENU` resource with
+`LoadMenu`/`GetSubMenu`/`GetMenuItemID`/`GetMenuStringW`: the entry under
+Play > Playback Skip reads "재생 스킵 설정..." (this build's UI is Korean, not
+English) with id `10240`, and the same id shows up in the `RT_ACCELERATOR`
+table (`LoadAccelerators`/`CopyAcceleratorTable`) bound to the bare `'` key —
+not `Ctrl+\`, which was the cross-process prototype's own accelerator choice,
+not a property of this command id. Posting
+`WM_COMMAND` with this id directly to the main window (`PostMessage`, never
+`SendMessage` — the same modal-dialog-blocks-the-caller hazard as section 6's
+Add... button gotcha, since PotPlayer's handler for this id runs its own
+`DialogBox` loop) opens Skip Setup with no synthesized keystroke and no
+foreground-window change at all.
+
+**Measured (live, via a temporary probe wired into `plugin::placeholder`,
+proxy installed against a real PotPlayer session):** a naive "poll
+`EnumWindows` for a `#32770` titled `Skip Setup`, then `SetWindowPos` it
+off-screen once found" loop does not satisfy "no visible flash" — a real,
+on-screen flash was observed even though the dialog was found and parked
+within about 100ms of the open command being posted. By the time a poll
+loop can find the window, it has already been shown once at its default
+(owner-centered) position; moving it afterward is measurably too late.
+
+**Fix, also measured live:** a `WH_CBT` hook installed on PotPlayer's own UI
+thread (`SetWindowsHookExW(WH_CBT, ..., hMod=nullptr, mainThreadId)` — `hMod`
+is `NULL` because the hook procedure lives in the same process as the
+target thread; this is an in-process plugin, not cross-process injection)
+intercepts window creation before the first paint:
+
+- The drop shadow (`PotShadowWnd`, an app-defined class) is caught at
+  `HCBT_CREATEWND`, where its pending `CREATESTRUCT` already carries the
+  real class name — rewriting `cs->x`/`cs->y` to an off-screen coordinate
+  there means `CreateWindowEx` never actually places it on-screen, not even
+  for one frame.
+- The dialog itself needs `HCBT_ACTIVATE` instead, not `HCBT_CREATEWND`:
+  **measured live** that Skip Setup's `CREATESTRUCT.lpszName` is *not* yet
+  `"Skip Setup"` at `HCBT_CREATEWND` time (apparently set later, e.g. via an
+  explicit `SetWindowText` during its own `WM_INITDIALOG`) — matching
+  against it at creation time silently missed the dialog entirely, leaving
+  a real, fully visible, on-screen dialog with nothing left driving it (the
+  probe logged a timeout and gave up; the dialog itself stayed open until
+  closed by hand). `HCBT_ACTIVATE` fires later, with a real, fully
+  initialized `HWND` whose title and class can be read directly
+  (`GetWindowTextW`/`GetClassNameW`), still before the system shows/paints
+  the window — `SetWindowPos` there reliably relocates it before the first
+  paint. This could never work for the shadow: `HCBT_ACTIVATE` never fires
+  for a `WS_EX_NOACTIVATE` popup like a drop shadow.
+
+Given both failure modes above cost a real stuck-open dialog and a real
+visible flash before landing on this design, the shipped implementation
+keeps a poll-based `EnumWindows`/title-match fallback for the case the hook
+still misses the dialog for some reason not yet observed — late and
+unable to promise "no flash," but guaranteed not to leave a real dialog
+sitting open with nothing watching it, which is strictly worse.
+
+**Measured (full live round trip, real PotPlayer, proxy installed):** with
+the `HCBT_ACTIVATE` fix in place, `OpenSkipSetup()` opened the dialog in
+~55-127ms with no observed flash and no foreground change, resolved all
+seven child controls (enable checkbox, range list, Add/Edit/Delete, OK/
+Cancel) plus the shadow window, and `CloseSkipSetupCancel()` posted the
+Cancel click and confirmed the window actually closed — repeated across two
+separate PotPlayer sessions.
