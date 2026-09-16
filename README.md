@@ -14,7 +14,9 @@ for the full plan. Nothing here talks to PotPlayer yet.
 - `plugin/` — the in-process plugin. Links `core`.
 - `proxy/` — `MediaDB64.dll`, the pass-through proxy PotPlayer loads in
   place of its own (stub for now).
-- `tests/` — `unit_tests`, run via CTest.
+- `tests/` — `unit_tests` (Catch2, via CTest); see [`tests/README.md`](tests/README.md)
+  for how the harness works and how to add tests.
+- `third_party/` — vendored dependencies (currently just Catch2).
 - `docs/` — reference docs and research findings.
 
 ## Requirements
