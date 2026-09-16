@@ -26,6 +26,9 @@ process (see `docs/FINDINGS.md` §5); the actual skip-marking feature logic
 - `tests/` — `unit_tests` (Catch2, via CTest); see [`tests/README.md`](tests/README.md)
   for how the harness works and how to add tests.
 - `third_party/` — vendored dependencies (currently just Catch2).
+- `tools/install/` — PowerShell install/uninstall/status/repair tooling for
+  putting the proxy in and out of a real PotPlayer install; see
+  [`tools/install/README.md`](tools/install/README.md).
 - `docs/` — reference docs and research findings.
 
 ## Requirements
