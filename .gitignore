@@ -1,0 +1,17 @@
+# Build output
+/build/
+/out/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Local-only artifacts — never commit real PotPlayer files or personal data
+*_orig.dll
+*.reg
