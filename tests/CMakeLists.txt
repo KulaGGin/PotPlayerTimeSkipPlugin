@@ -2,6 +2,10 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/third_party/catch2 ${CMAKE_CURRENT_BINARY_D
 
 add_executable(unit_tests
     unit/core/add_test.cpp
+    unit/core/timecode_test.cpp
+    unit/core/skip_range_test.cpp
+    unit/core/pbf_test.cpp
+    unit/core/human_input_test.cpp
     unit/diagnostics/format_test.cpp
 )
 
