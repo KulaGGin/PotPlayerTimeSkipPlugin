@@ -7,9 +7,10 @@ add_executable(unit_tests
     unit/core/pbf_test.cpp
     unit/core/human_input_test.cpp
     unit/diagnostics/format_test.cpp
+    unit/plugin/window_test.cpp
 )
 
-target_link_libraries(unit_tests PRIVATE core diagnostics Catch2::Catch2WithMain)
+target_link_libraries(unit_tests PRIVATE core diagnostics plugin Catch2::Catch2WithMain)
 
 include(${CATCH2_MODULE_PATH}/Catch.cmake)
 catch_discover_tests(unit_tests)

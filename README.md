@@ -18,7 +18,10 @@ process (see `docs/FINDINGS.md` §5); the actual skip-marking feature logic
   Static library, links into `plugin` and `proxy`. Writes UTF-8 lines to
   `%LOCALAPPDATA%\PotPlayerTimeSkip\plugin.log` and mirrors them to
   `OutputDebugString`.
-- `plugin/` — the in-process plugin. Links `core` and `diagnostics`.
+- `plugin/` — the in-process plugin. Links `core` and `diagnostics`. Currently
+  provides window discovery and playback-state queries (`GetPositionMs`,
+  `GetDurationMs`, `GetStatus`) against PotPlayer's own `PotPlayer64` window;
+  hotkeys/dialogs/OSD land in later issues.
 - `proxy/` — `MediaDB64.dll`, the proxy PotPlayer loads in place of its own,
   forwarding all three real exports to a renamed `MediaDB64_orig.dll` and
   bootstrapping `plugin` on a dedicated worker thread from `DllMain`. Links
