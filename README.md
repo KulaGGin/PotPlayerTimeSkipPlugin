@@ -5,7 +5,9 @@ auto-skip ranges of a video (intros, recaps, ads, ...) on future playback.
 
 The repository is still at the scaffolding stage — see the
 [issue backlog](https://github.com/KulaGGin/PotPlayerTimeSkipPlugin/issues)
-for the full plan. Nothing here talks to PotPlayer yet.
+for the full plan. `proxy/` loads and bootstraps inside PotPlayer's own
+process (see `docs/FINDINGS.md` §5); the actual skip-marking feature logic
+(hotkeys, dialogs, OSD) isn't built yet.
 
 ## Layout
 
@@ -17,8 +19,10 @@ for the full plan. Nothing here talks to PotPlayer yet.
   `%LOCALAPPDATA%\PotPlayerTimeSkip\plugin.log` and mirrors them to
   `OutputDebugString`.
 - `plugin/` — the in-process plugin. Links `core` and `diagnostics`.
-- `proxy/` — `MediaDB64.dll`, the pass-through proxy PotPlayer loads in
-  place of its own (stub for now). Links `diagnostics`.
+- `proxy/` — `MediaDB64.dll`, the proxy PotPlayer loads in place of its own,
+  forwarding all three real exports to a renamed `MediaDB64_orig.dll` and
+  bootstrapping `plugin` on a dedicated worker thread from `DllMain`. Links
+  `plugin` and `diagnostics`.
 - `tests/` — `unit_tests` (Catch2, via CTest); see [`tests/README.md`](tests/README.md)
   for how the harness works and how to add tests.
 - `third_party/` — vendored dependencies (currently just Catch2).

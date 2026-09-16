@@ -297,6 +297,56 @@ fallback is not needed. PTS-006 builds the real plugin logic on top of this
 forwarder, started from `DllMain`'s `DLL_PROCESS_ATTACH` at the (now
 confirmed lazy, file-open-triggered) load point.
 
+### PTS-006 — bootstrap threading: a real loader-lock deadlock, found and fixed
+
+**Measured (via the `proxy_dllmain_no_deadlock` CTest case):** the first
+bootstrap design — spawn a worker thread from `DLL_PROCESS_ATTACH`, and on
+`DLL_PROCESS_DETACH` `SetEvent` it to stop and `WaitForSingleObject` on its
+handle to join it — deadlocked. Every run of that CTest case took exactly
+its 5-second `WaitForSingleObject` timeout (not the instant pass a working
+join gives), and the diagnostic log confirmed why: the worker thread's own
+*"started"* line never appeared before the join gave up. Root cause: a new
+thread's own startup (`CreateThread`) must acquire the loader lock to run
+`DLL_THREAD_ATTACH` notifications for every other loaded module before it
+reaches any user code — but the thread calling `WaitForSingleObject` to join
+it is doing so from inside `DllMain`, which already holds that same loader
+lock and won't release it until the join returns. Self-deadlock, silently
+"resolved" only by the join's own timeout — and even then, the DLL would be
+unmapped by `FreeLibrary` while that worker thread might still be stuck
+mid-startup inside it.
+
+**Fix:** never join the worker thread from `DllMain` at all. Instead, the
+proxy takes an extra reference to its own module in `DLL_PROCESS_ATTACH` via
+`GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, ...)` (a safe
+refcount bump — no `DllMain` re-entry, unlike calling `LoadLibrary` from
+`DllMain`, which is itself unsafe). `DLL_PROCESS_DETACH` just signals a stop
+event and returns immediately, no wait. The worker thread, once it wakes on
+that event, calls `FreeLibraryAndExitThread` — which releases the extra
+reference and exits the thread as one atomic step, so the module is only
+ever unmapped after that thread has already left it. This is the standard
+pattern for "a thread that must free its own DLL and stop." After the fix,
+the same CTest case passes in ~0.01 s instead of hanging out the full 5 s
+timeout.
+
+**Measured (live test against real PotPlayer, same swap/restore cycle as
+PTS-005):** with the fixed proxy installed and a test clip opened, the log
+showed the full expected sequence — `MediaDB64 proxy attached` on the
+loader's own thread, then, on a **different** thread ID, `proxy worker
+thread started` followed by `plugin::placeholder called` — confirming the
+bootstrap genuinely runs off the loader-lock-holding thread, inside the
+real process, without stalling it. The main window and playlist rendered
+normally (screenshot-verified) and the process stayed responsive throughout.
+A force-kill (`TerminateProcess`, the worst case — no `DllMain` notification
+at all) exited cleanly with no hang or leftover process. The original DLL
+was restored and hash-verified byte-identical afterward, and a final
+relaunch confirmed normal unmodified behavior.
+
+**Ordinals:** the real `MediaDB64.dll`'s export ordinals (`dumpbin
+/exports`) are 1/2/3 for `CreateDatabaseEngine`/`CreateJpegDecoder`/
+`CreateSMTC` respectively — the proxy's `/EXPORT` forwarders now pin the
+same ordinals explicitly (`,@1` / `,@2` / `,@3`) rather than relying on the
+linker's default assignment happening to match.
+
 ## 6. Cross-process gotchas
 
 Kept specifically for the injector-launcher fallback and for any future
