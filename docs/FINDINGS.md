@@ -241,24 +241,61 @@ expected to load at or near startup, before any file is opened — this is
 inferred from what the exports *do*, not verified with a debugger or loader
 trace against a cold start. Re-confirming this is in scope for PTS-005.
 
-**Design (not yet built or tested):** the intended proxy mechanism is to
-rename the real file to `MediaDB64_orig.dll`, drop a replacement
-`MediaDB64.dll` in its place exporting the same 3 names as PE forwarders
-(`CreateDatabaseEngine=MediaDB64_orig.CreateDatabaseEngine`, etc.) so the
-loader resolves them transparently, and have that replacement's `DllMain`
-spin up the plugin's own hotkey/dialog-driving thread.
+**Built and tested (PTS-005):** the proxy mechanism is to rename the real
+file to `MediaDB64_orig.dll`, drop a replacement `MediaDB64.dll` in its
+place exporting the same 3 names as PE forwarders
+(`CreateDatabaseEngine=MediaDB64_orig.CreateDatabaseEngine`, etc., via MSVC
+`#pragma comment(linker, "/EXPORT:...")` — a `.def`-file `EXPORTS
+name=Dll.Func` line was tried first and failed to link as a forwarder under
+this toolchain's linker; the `/EXPORT` pragma form worked) so the loader
+resolves them transparently, and have that replacement's `DllMain` spin up
+the plugin's own hotkey/dialog-driving thread.
 
-**The open, decisive risk — explicitly not yet measured:** whether
-`PotPlayer64.dll` actually verifies `MediaDB64.dll`'s Authenticode signature
-before trusting it (using the `wintrust`/`crypt32`/`imagehlp` trio above) is
-unknown and unknowable from static analysis alone. If it does, an unsigned
-proxy is rejected and this whole vector fails. This is exactly what PTS-005
-(proxy viability spike) exists to test — by installing a pure pass-through
-forwarder with no plugin code and seeing whether PotPlayer still starts
-normally — before any real plugin code is written against this design. If
-it fails, the fallback is an injector-launcher (`CreateRemoteThread` +
-`LoadLibrary`), which sidesteps signature/import-table checks entirely
-since it never touches a file PotPlayer loads by name.
+### PTS-005 viability spike — verdict: **PASS, proceed with the proxy design**
+
+**Measured (live swap test against `PotPlayerMini64.exe` 2025-04-22,
+2026-09-16):** a pure pass-through forwarder (`proxy/`, no plugin logic,
+`DllMain` only logs attach/detach) was built, the real `MediaDB64.dll` was
+renamed to `MediaDB64_orig.dll`, the forwarder dropped in as `MediaDB64.dll`,
+and PotPlayer relaunched.
+
+- **The decisive result: no signature gate.** `PotPlayer64.dll` loaded the
+  unsigned forwarder without rejection, crash, or degraded behavior. Proof
+  it actually ran in-process, not just that the app didn't crash:
+  `MediaDB64.dll` and `MediaDB64_orig.DLL` both showed up in the live
+  process's module list (`Process.Modules`, both loaded — the forwarder
+  RVAs pull in the original as soon as an export is resolved), and this
+  proxy's own `DllMain` wrote `MediaDB64 proxy attached` to
+  `%LOCALAPPDATA%\PotPlayerTimeSkip\plugin.log`, which only a DLL actually
+  loaded and executing inside PotPlayer's process can produce.
+- Process stayed responsive (`Process.Responding == true`) throughout, and
+  the UI (main window, skin, playlist panel showing an opened test clip)
+  rendered normally — a screenshot taken mid-test showed no degraded or
+  fallback UI state.
+- **Correction to the "near startup" assumption above:** `MediaDB64.dll` is
+  **not** loaded at process launch. A cold launch reached a main window in
+  ~700 ms with `MediaDB64.dll` absent from the module list at that point
+  (confirmed by full module enumeration, 102 modules, none matching). It
+  only loaded once a media file was actually opened/queued (a synthetic
+  5-second test clip via `PlayerMini64.exe "<file>"`), appearing in the
+  module list and logging attach within ~2-4 s of that call returning. The
+  three exports' inferred responsibilities (library DB, thumbnails, SMTC)
+  are apparently wired to first-file-open, not process start. This matters
+  for PTS-006: the plugin's hotkey/dialog thread must be started from a
+  trigger that survives this lazy load (`DllMain`'s `DLL_PROCESS_ATTACH`
+  still fires exactly once at that later load point, so it remains a valid
+  hook — it just fires later than originally assumed, not before).
+- **Restore verified byte-exact:** after the test, `MediaDB64.dll` and
+  `MediaDB64_orig.dll` were both stopped-process-then-swapped back
+  (original moved back over the proxy), and the restored file's SHA-256
+  matched the pre-test backup exactly. A second relaunch afterward showed
+  normal unmodified behavior with only `MediaDB64.dll` present on disk (no
+  leftover `_orig` file) and its original timestamp intact.
+
+**Verdict:** proceed with the proxy-DLL design. The injector-launcher
+fallback is not needed. PTS-006 builds the real plugin logic on top of this
+forwarder, started from `DllMain`'s `DLL_PROCESS_ATTACH` at the (now
+confirmed lazy, file-open-triggered) load point.
 
 ## 6. Cross-process gotchas
 

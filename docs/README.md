@@ -8,6 +8,6 @@ measured/inferred fact about how PotPlayer stores and manages skip ranges
 playback query interface, loader/proxy analysis, and cross-process
 gotchas). Don't duplicate that detail elsewhere — link here instead.
 
-PTS-005's proxy-viability verdict (whether PotPlayer accepts an unsigned
-`MediaDB64.dll` proxy) will be recorded as an update to `FINDINGS.md` §5
-once that spike runs.
+PTS-005's proxy-viability verdict is in: PotPlayer accepts an unsigned
+`MediaDB64.dll` proxy with no signature gate. See `FINDINGS.md` §5 for the
+measured evidence and the (initially wrong) lazy-load correction.
