@@ -22,6 +22,7 @@ endif()
 enable_testing()
 
 add_subdirectory(core)
+add_subdirectory(diagnostics)
 add_subdirectory(plugin)
 add_subdirectory(proxy)
 add_subdirectory(tests)

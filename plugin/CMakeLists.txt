@@ -3,4 +3,4 @@ add_library(plugin STATIC
 )
 
 target_include_directories(plugin PUBLIC include)
-target_link_libraries(plugin PUBLIC core)
+target_link_libraries(plugin PUBLIC core diagnostics)

@@ -22,8 +22,21 @@ core/include/core/core.hpp   ->  tests/unit/core/core_test.cpp
 core/src/core.cpp            ->
 ```
 
-(Today that's just `tests/unit/core/add_test.cpp` for `core::add`, the one
-function `core/` exports so far.)
+(Today that's `tests/unit/core/add_test.cpp` for `core::add`, and
+`tests/unit/diagnostics/format_test.cpp` for the diagnostics module's pure
+line-formatting logic.)
+
+## The DllMain harness
+
+`tests/dllmain_harness/` is a separate, non-Catch2 CTest test: a real
+`dllmain_harness.dll` that calls `LOG_*` from inside its own `DllMain`, and
+a tiny `dllmain_harness_runner.exe` that `LoadLibrary`/`FreeLibrary`s it.
+It exists because the diagnostics module (PTS-004) is explicitly required
+to be safe to call from a `DllMain`-like context — a deadlocked loader lock
+can't be caught by a normal assertion, but it will hang `LoadLibrary`
+forever, so the test is registered with a CTest `TIMEOUT` (see
+`tests/dllmain_harness/CMakeLists.txt`) that turns a hang into a failure
+instead of an indefinitely stuck `ctest` run.
 
 ## Adding a test
 

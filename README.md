@@ -11,9 +11,14 @@ for the full plan. Nothing here talks to PotPlayer yet.
 
 - `core/` — timecode / skip-range logic. Static library, no Win32
   dependency, unit-testable on its own.
-- `plugin/` — the in-process plugin. Links `core`.
+- `diagnostics/` — the plugin's always-available diagnostic log (`LOG_INFO`
+  / `LOG_WARN` / `LOG_ERROR`), safe to call from a `DllMain`-like context.
+  Static library, links into `plugin` and `proxy`. Writes UTF-8 lines to
+  `%LOCALAPPDATA%\PotPlayerTimeSkip\plugin.log` and mirrors them to
+  `OutputDebugString`.
+- `plugin/` — the in-process plugin. Links `core` and `diagnostics`.
 - `proxy/` — `MediaDB64.dll`, the pass-through proxy PotPlayer loads in
-  place of its own (stub for now).
+  place of its own (stub for now). Links `diagnostics`.
 - `tests/` — `unit_tests` (Catch2, via CTest); see [`tests/README.md`](tests/README.md)
   for how the harness works and how to add tests.
 - `third_party/` — vendored dependencies (currently just Catch2).
