@@ -445,3 +445,52 @@ seven child controls (enable checkbox, range list, Add/Edit/Delete, OK/
 Cancel) plus the shadow window, and `CloseSkipSetupCancel()` posted the
 Cancel click and confirmed the window actually closed — repeated across two
 separate PotPlayer sessions.
+
+## 8. Hotkey registration & dispatch (PTS-013)
+
+**Mechanism choice:** `RegisterHotKey` on the worker thread, not a
+PotPlayer-scoped `WH_KEYBOARD` hook. `RegisterHotKey` is unavoidably
+system-global (its `WM_HOTKEY` fires no matter which app is focused), which
+is normally the argument for a scoped hook instead — but a `WM_HOTKEY`
+message loop already has to exist on this thread either way, while a hook
+would be a second, separate mechanism (a hook procedure, install/remove
+lifecycle, thread-attachment scoping) for the same net behavior. Instead,
+the "only while PotPlayer is the active app" requirement is met with a
+per-press foreground check (`GetForegroundWindow()`'s owning process ==
+`GetCurrentProcessId()`) done at dispatch time, before a resolved action is
+actually invoked — never at registration time, since RegisterHotKey has no
+concept of "only when foregrounded" to register against. Checking by owning
+process rather than matching a specific cached HWND also means a fullscreen
+video surface or one of PotPlayer's own dialogs having focus still counts as
+"PotPlayer foreground," not just the main window itself.
+
+**Message loop:** folded into the existing PTS-006 worker thread rather than
+a second thread — `RunHotkeyPump` replaces that thread's previous
+`WaitForSingleObject(g_stopEvent, INFINITE)` with
+`MsgWaitForMultipleObjects(1, &stopEvent, ...)` in a loop, draining the full
+message queue (not just one message) each time it wakes, so a burst of
+presses is never left partially queued when the loop goes back to waiting.
+`RegisterHotKey`/`UnregisterHotKey` are called with `hWnd = NULL`, which
+binds the hotkey to the calling thread's own message queue rather than a
+window — matching "the hotkeys live and die with the worker thread" from
+this issue's goal.
+
+**Registration failure handling:** each of the three keys is registered
+independently; one already being taken by another app is logged
+(`LOG_WARN`) and skipped, never fatal — the other two still work, and the
+plugin stays alive either way, per this issue's acceptance criteria.
+
+**Measured (synthetic harness, no live PotPlayer available in this
+environment — unlike every other entry in this file, this one is not a real
+PotPlayer session):** loading the production proxy DLL and giving its
+worker thread time to run before unloading showed the expected sequence —
+`proxy worker thread started` followed by `hotkeys: pump started`, with no
+`RegisterHotKey failed` warnings, confirming registration succeeds cleanly
+on a normal developer machine with no conflicting global hotkeys. The
+existing `proxy_dllmain_no_deadlock` CTest case (a bare, near-instant
+load/unload) continues to pass with the pump wired in, confirming the
+switch from `WaitForSingleObject` to `MsgWaitForMultipleObjects` didn't
+reintroduce PTS-006's loader-lock deadlock. Live confirmation against a
+real PotPlayer session (does a keypress actually reach `HandleAltA`/etc.,
+does the foreground gate actually suppress it when unfocused) is
+PTS-018's job, per this issue's own "Tests" section.

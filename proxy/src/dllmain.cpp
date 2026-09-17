@@ -1,7 +1,7 @@
 #include <windows.h>
 
 #include "diagnostics/log.hpp"
-#include "plugin/plugin.hpp"
+#include "plugin/hotkey_pump.hpp"
 
 // PTS-006 production proxy. All three real exports are forwarded to
 // MediaDB64_orig.dll by both name and ordinal (PE forwarder RVAs, resolved
@@ -25,11 +25,12 @@ HMODULE g_selfModule = nullptr;
 
 DWORD WINAPI WorkerThreadProc(LPVOID) {
     LOG_INFO("proxy worker thread started");
-    // Real hotkey/dialog-driving plugin logic lands on this thread in later
-    // issues; plugin::placeholder() is today's stand-in bootstrap call.
-    plugin::placeholder();
 
-    WaitForSingleObject(g_stopEvent, INFINITE);
+    // PTS-013: hotkey registration and dispatch now runs on this thread —
+    // RunHotkeyPump blocks here, pumping WM_HOTKEY, until g_stopEvent is
+    // signaled below from DLL_PROCESS_DETACH.
+    plugin::RunHotkeyPump(g_stopEvent);
+
     LOG_INFO("proxy worker thread stopping");
     CloseHandle(g_stopEvent);
     g_stopEvent = nullptr;
