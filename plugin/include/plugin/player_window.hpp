@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <string>
 
 #include "core/core.hpp"
 
@@ -34,5 +36,15 @@ bool IsFileOpen();
 // Exposed for PTS-010's Skip Setup dialog, which needs the real handle to
 // post its open command to.
 std::uintptr_t GetMainWindowHandle();
+
+// Reads PotPlayer64.dll's own VS_FIXEDFILEINFO file-version resource —
+// standard, measurable Win32 metadata every EXE/DLL carries, not a guess —
+// as "MS_hi.MS_lo.LS_hi.LS_lo" (e.g. "1.2.3.4"). Used by PTS-017's
+// self-check to record which build was last validated. The module is
+// resolved by name (GetModuleHandleW), not read from disk, since this is an
+// in-process plugin already loaded inside PotPlayer64.dll's own process —
+// no path lookup needed. Returns nullopt if the module can't be found or
+// carries no version resource, rather than a placeholder string.
+std::optional<std::string> GetPotPlayerVersion();
 
 }

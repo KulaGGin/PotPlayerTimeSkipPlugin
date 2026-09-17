@@ -24,6 +24,17 @@ namespace plugin {
 // committed", with no real window, dialog, or SendMessage anywhere in the
 // test binary.
 struct SkipMarkingDriver {
+    // PTS-017: nullopt if this PotPlayer build still matches every
+    // assumption docs/FINDINGS.md's dialog-geography section measured, or a
+    // logged-and-shown detail string on the first mismatch found. Checked
+    // before every other guard in every handler below — a version drift is
+    // refused the same "logged, shown, never a guessed write" way "no file
+    // open" is, rather than only surfacing once AddFileSpecificSkipRange
+    // happens to be reached. The live driver runs the actual check at most
+    // once per process and caches the result (plugin::EnsureSelfCheckPassed
+    // — this issue's own "one-time validation on first hotkey use" design
+    // note), so this callback is cheap on every call after the first.
+    std::function<std::optional<std::string>()> checkVersionSupport;
     std::function<bool()> isFileOpen;
     std::function<core::Milliseconds()> getPositionMs;
     // Drives the full open-Setup/enable/add/OK round trip for one range.
@@ -70,7 +81,9 @@ public:
     // Alt+[: sets the pending mark's start to the current playback
     // position, always overwriting whatever was there before. Refuses
     // (logged), leaving the pending mark untouched, if no file is open —
-    // PTS-009's IsFileOpen() — rather than marking into the void.
+    // PTS-009's IsFileOpen() — rather than marking into the void. Also
+    // refuses if PTS-017's self-check found this PotPlayer build
+    // unsupported (checked first, ahead of every other guard here).
     void OnAltOpenBracket();
 
     // Alt+]: sets the pending mark's end to the current playback position,
@@ -79,10 +92,11 @@ public:
 
     // Alt+A: commits the pending start/end as one new File-specific range
     // for the currently open file. Refuses (logged + OSD), leaving the
-    // pending mark untouched so it can be fixed and retried, if: no file is
-    // open; the pending start and/or end hasn't been set yet; or the
-    // pending end is not strictly after the pending start (PotPlayer
-    // requires end > start).
+    // pending mark untouched so it can be fixed and retried, if: PTS-017's
+    // self-check found this PotPlayer build unsupported; no file is open;
+    // the pending start and/or end hasn't been set yet; or the pending end
+    // is not strictly after the pending start (PotPlayer requires
+    // end > start).
     void OnAltA();
 
 private:

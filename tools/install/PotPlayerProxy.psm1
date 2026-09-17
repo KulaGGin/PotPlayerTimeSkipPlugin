@@ -200,6 +200,52 @@ function Get-PotPlayerVersion {
     return $vi.ProductVersion
 }
 
+function Get-PluginSelfCheckStatus {
+    <#
+    .SYNOPSIS
+    Reads the plugin's own PTS-017 self-check result.
+
+    .DESCRIPTION
+    plugin::EnsureSelfCheckPassed (plugin/src/self_check.cpp) writes this
+    file the first time a hotkey is pressed against a live PotPlayer
+    session -  it is a *runtime* confirmation that the main window class
+    and both dialogs' controls still match docs/FINDINGS.md section 3,
+    distinct from Get-PotPlayerVersion above (which only reads the
+    installed exe's own file-version resource and says nothing about
+    whether the plugin has actually verified it against that build).
+
+    .PARAMETER Path
+    Overridable for tests; defaults to the real
+    %LOCALAPPDATA%\PotPlayerTimeSkip\selfcheck.ini.
+
+    .OUTPUTS
+    A PSCustomObject: Result ('Pass', 'Fail', or 'NeverRun' if the file
+    doesn't exist yet -  no hotkey has been pressed since install/update),
+    PotPlayerVersion, and Detail (empty on Pass or NeverRun).
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Path = (Join-Path $env:LOCALAPPDATA 'PotPlayerTimeSkip\selfcheck.ini')
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return [PSCustomObject]@{ Result = 'NeverRun'; PotPlayerVersion = $null; Detail = '' }
+    }
+
+    $values = @{ Result = 'Unknown'; PotPlayerVersion = $null; Detail = '' }
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match '^(Result|PotPlayerVersion|Detail)=(.*)$') {
+            $values[$Matches[1]] = $Matches[2]
+        }
+    }
+
+    return [PSCustomObject]@{
+        Result           = $values.Result
+        PotPlayerVersion = $values.PotPlayerVersion
+        Detail           = $values.Detail
+    }
+}
+
 function Get-ProxyInstallState {
     <#
     .SYNOPSIS
@@ -444,11 +490,14 @@ function Get-ProxyStatusReport {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$InstallDir,
-        [string]$ProxyPath
+        [string]$ProxyPath,
+        # Overridable for tests; see Get-PluginSelfCheckStatus's own default.
+        [string]$SelfCheckPath = (Join-Path $env:LOCALAPPDATA 'PotPlayerTimeSkip\selfcheck.ini')
     )
 
     $state = Get-ProxyInstallState -InstallDir $InstallDir
     $version = Get-PotPlayerVersion -InstallDir $InstallDir
+    $selfCheck = Get-PluginSelfCheckStatus -Path $SelfCheckPath
 
     $originalMatch = 'Unknown'
     if ($ProxyPath -and (Test-Path -LiteralPath $ProxyPath -PathType Leaf)) {
@@ -466,12 +515,15 @@ function Get-ProxyStatusReport {
     }
 
     return [PSCustomObject]@{
-        InstallDir       = $InstallDir
-        State            = $state.State
-        Detail           = $state.Detail
-        PotPlayerVersion = $version
-        OriginalMatch    = $originalMatch
-        PotPlayerRunning = [bool](Test-PotPlayerRunning)
+        InstallDir             = $InstallDir
+        State                  = $state.State
+        Detail                 = $state.Detail
+        PotPlayerVersion       = $version
+        OriginalMatch          = $originalMatch
+        PotPlayerRunning       = [bool](Test-PotPlayerRunning)
+        SelfCheckResult        = $selfCheck.Result
+        SelfCheckPotPlayerVersion = $selfCheck.PotPlayerVersion
+        SelfCheckDetail        = $selfCheck.Detail
     }
 }
 
@@ -481,6 +533,7 @@ Export-ModuleMember -Function `
     Test-DirectoryWritable, `
     Test-PotPlayerRunning, `
     Get-PotPlayerVersion, `
+    Get-PluginSelfCheckStatus, `
     Get-ProxyInstallState, `
     Install-PotPlayerProxy, `
     Uninstall-PotPlayerProxy, `

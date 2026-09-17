@@ -5,6 +5,7 @@
 #include "diagnostics/log.hpp"
 #include "plugin/osd.hpp"
 #include "plugin/player_window.hpp"
+#include "plugin/self_check.hpp"
 #include "plugin/skip_setup.hpp"
 
 namespace plugin {
@@ -38,6 +39,7 @@ bool CommitRangeLive(const core::SkipRange& range, bool autoEnableSkip) {
 
 SkipMarkingDriver MakeLiveSkipMarkingDriver(bool autoEnableSkip) {
     return SkipMarkingDriver{
+        .checkVersionSupport = &EnsureSelfCheckPassed,
         .isFileOpen = &IsFileOpen,
         .getPositionMs = &GetPositionMs,
         .commitRange = [autoEnableSkip](const core::SkipRange& range) { return CommitRangeLive(range, autoEnableSkip); },
@@ -48,6 +50,11 @@ SkipMarkingDriver MakeLiveSkipMarkingDriver(bool autoEnableSkip) {
 SkipMarkingStateMachine::SkipMarkingStateMachine(SkipMarkingDriver driver) : driver_(std::move(driver)) {}
 
 void SkipMarkingStateMachine::OnAltOpenBracket() {
+    if (const auto unsupported = driver_.checkVersionSupport()) {
+        LOG_ERROR("skip-marking: Alt+[ ignored, {}", *unsupported);
+        driver_.showOsd(ComposeOsdText({OsdEvent::kUnsupportedVersion}));
+        return;
+    }
     if (!driver_.isFileOpen()) {
         LOG_WARN("skip-marking: Alt+[ ignored, no file open");
         driver_.showOsd(ComposeOsdText({OsdEvent::kNoFileOpen}));
@@ -61,6 +68,11 @@ void SkipMarkingStateMachine::OnAltOpenBracket() {
 }
 
 void SkipMarkingStateMachine::OnAltCloseBracket() {
+    if (const auto unsupported = driver_.checkVersionSupport()) {
+        LOG_ERROR("skip-marking: Alt+] ignored, {}", *unsupported);
+        driver_.showOsd(ComposeOsdText({OsdEvent::kUnsupportedVersion}));
+        return;
+    }
     if (!driver_.isFileOpen()) {
         LOG_WARN("skip-marking: Alt+] ignored, no file open");
         driver_.showOsd(ComposeOsdText({OsdEvent::kNoFileOpen}));
@@ -74,6 +86,11 @@ void SkipMarkingStateMachine::OnAltCloseBracket() {
 }
 
 void SkipMarkingStateMachine::OnAltA() {
+    if (const auto unsupported = driver_.checkVersionSupport()) {
+        LOG_ERROR("skip-marking: Alt+A ignored, {}", *unsupported);
+        driver_.showOsd(ComposeOsdText({OsdEvent::kUnsupportedVersion}));
+        return;
+    }
     if (!driver_.isFileOpen()) {
         LOG_WARN("skip-marking: Alt+A ignored, no file open");
         driver_.showOsd(ComposeOsdText({OsdEvent::kNoFileOpen}));

@@ -113,6 +113,20 @@ skip-marking workflow isn't configurable: `Alt+[`/`Alt+]` always edit a
 pending start/end (in either order, any number of times) and `Alt+A` always
 commits them, so there is nothing to choose between yet.
 
+## Version resilience
+
+Every dialog control id, window class, and export set the plugin depends on
+is tied to a specific measured PotPlayer build (see `docs/FINDINGS.md`'s
+Provenance section). The first hotkey press after PotPlayer starts runs a
+one-time self-check confirming the main window class and both Skip
+dialogs' controls still match; on any mismatch, every hotkey refuses
+(logged, and shown as "This PotPlayer version isn't supported" on screen)
+rather than writing a guessed value. The last self-check's result and
+PotPlayer version are surfaced by `tools\install\potplayer-proxy.ps1
+Status`. After a PotPlayer update, `docs/REVERIFICATION_CHECKLIST.md` is
+the bounded, step-by-step task for bringing the plugin's measurements back
+up to date.
+
 ## Notes
 
 - x64 only; there is no 32-bit configuration.

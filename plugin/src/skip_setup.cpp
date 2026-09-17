@@ -503,6 +503,42 @@ bool AddFileSpecificSkipRange(const SkipSetupDialog& dialog, const core::SkipRan
     return true;
 }
 
+std::optional<std::string> CheckSkipIntervalControls(const SkipSetupDialog& dialog) {
+    const HWND setupHwnd = reinterpret_cast<HWND>(dialog.hwnd);
+    const HWND addButton = reinterpret_cast<HWND>(dialog.controls.addButton);
+
+    // PostMessage, never SendMessage: same modal-DialogBox hazard as
+    // AddFileSpecificSkipRange's identical Add... click (docs/FINDINGS.md
+    // section 6).
+    if (!PostMessageW(setupHwnd, WM_COMMAND, MAKEWPARAM(kAddButtonId, BN_CLICKED),
+                       reinterpret_cast<LPARAM>(addButton))) {
+        LOG_ERROR("plugin: self-check: PostMessage(Skip Setup Add...) failed, gle={}", GetLastError());
+        return "could not click Skip Setup's Add... button";
+    }
+
+    const HWND interval = WaitForSkipIntervalSetup();
+    if (interval == nullptr) {
+        LOG_ERROR("plugin: self-check: Skip Interval Setup did not appear within {} ms", kOpenTimeoutMs);
+        return "Skip Interval Setup did not appear";
+    }
+    ParkOffScreen(interval);
+
+    auto resolution = ResolveSkipIntervalControls(
+        [interval](int id) { return reinterpret_cast<std::uintptr_t>(GetDlgItem(interval, id)); });
+
+    // Cancel either way — this only ever checks, never commits — the same
+    // Cancel-on-any-problem path AddFileSpecificSkipRange takes on its own
+    // read-back mismatch.
+    PostIntervalButtonAndWaitClosed(interval, kIntervalCancelButtonId, GetDlgItem(interval, kIntervalCancelButtonId));
+
+    if (const auto* missing = std::get_if<MissingSkipIntervalControl>(&resolution)) {
+        LOG_ERROR("plugin: self-check: Skip Interval Setup control id {} is missing — layout mismatch?",
+                   missing->id);
+        return "Skip Interval Setup control id " + std::to_string(missing->id) + " not found";
+    }
+    return std::nullopt;
+}
+
 std::optional<int> ResolveSkipRangeIndexToDelete(int index, int count) {
     if (index < 0 || index >= count) {
         return std::nullopt;

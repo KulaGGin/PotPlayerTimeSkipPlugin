@@ -13,6 +13,7 @@ add_executable(unit_tests
     unit/plugin/hotkeys_test.cpp
     unit/plugin/osd_test.cpp
     unit/plugin/skip_marking_test.cpp
+    unit/plugin/self_check_test.cpp
 )
 
 target_link_libraries(unit_tests PRIVATE core diagnostics plugin Catch2::Catch2WithMain)

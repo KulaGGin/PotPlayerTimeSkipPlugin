@@ -24,6 +24,7 @@ enum class OsdEvent {
     kMarkEnd,         // Alt+] set the pending mark's end (no commit yet)
     kSaved,           // Alt+A committed the pending mark and it succeeded
     kSaveFailed,      // Alt+A committed the pending mark but it failed
+    kUnsupportedVersion,  // PTS-017 self-check found this PotPlayer build doesn't match
 };
 
 // Not every event needs both times: kMarkStart reads only startMs, kMarkEnd

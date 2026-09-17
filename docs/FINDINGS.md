@@ -541,3 +541,44 @@ positioned over the player window with the expected text (new mark / start
 set / saved), auto-dismissed on their own, never stole focus, and didn't
 interfere with playback. Confirmed by the person driving the session
 directly, not just via the log.
+
+## 10. Control-ID drift detection & version resilience (PTS-017)
+
+**Design:** every measurement in sections 3/4/5 above is tied to one
+specific PotPlayer build (see Provenance). Rather than trust those
+measurements forever, the plugin runs a one-time self-check
+(`plugin::EnsureSelfCheckPassed`, `plugin/src/self_check.cpp`) the first
+time any of the three hotkeys is pressed: it confirms the main window
+class resolves, then opens Skip Setup and, through it, Skip Interval
+Setup, resolving every control id section 3's tables list — Cancelling
+both dialogs afterward, never committing a probe range. `RunSelfCheckSequence`
+(`plugin/include/plugin/self_check.hpp`) is the pure ordering logic (main
+window -> Skip Setup -> Skip Interval Setup, stopping at the first
+failure), unit-tested against synthetic callback outcomes with no live
+dialog needed — the same split the rest of this codebase uses between
+pure sequencing and the live Win32 half.
+
+**On mismatch:** every hotkey handler in `SkipMarkingStateMachine`
+(`plugin/src/skip_marking.cpp`) checks the cached self-check result before
+its own existing guards (no-file-open, incomplete pending mark, etc.) and
+refuses — logged via `LOG_ERROR` with which stage/control failed, and
+shown on screen as "This PotPlayer version isn't supported"
+(`OsdEvent::kUnsupportedVersion`) — rather than proceeding to write
+anything. The check runs at most once per process (cached), matching this
+issue's own design note that a fresh dialog probe on every keypress isn't
+warranted.
+
+**Version recording:** `plugin::GetPotPlayerVersion` (`plugin/src/player_window.cpp`)
+reads `PotPlayer64.dll`'s own `VS_FIXEDFILEINFO` file-version resource —
+the module is already loaded in-process, so this is a `GetModuleHandleW` +
+`GetFileVersionInfoW`/`VerQueryValueW` read, not a guess. The self-check
+writes the validated (or attempted) version, pass/fail result, and failure
+detail to `%LOCALAPPDATA%\PotPlayerTimeSkip\selfcheck.ini`, which
+`tools/install/PotPlayerProxy.psm1`'s `Get-PluginSelfCheckStatus` (and, via
+it, `Get-ProxyStatusReport`/PTS-007's `Status` command) reads back and
+surfaces alongside the installed exe's own file version.
+
+**Re-verification checklist:** `docs/REVERIFICATION_CHECKLIST.md` is the
+bounded, step-by-step task for bringing every measurement in this file
+back up to date after a PotPlayer update, starting from whatever the
+self-check's own failure detail points at.

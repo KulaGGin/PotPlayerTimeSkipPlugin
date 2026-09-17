@@ -266,6 +266,50 @@ try {
     }
 
     # -----------------------------------------------------------------
+    # Scenario: PTS-017 self-check status (Get-PluginSelfCheckStatus),
+    # independent of any real MediaDB64/PotPlayer install above.
+    # -----------------------------------------------------------------
+    $selfCheckDir = Join-Path $root 'selfcheck'
+    New-Item -ItemType Directory -Path $selfCheckDir -Force | Out-Null
+    $selfCheckPath = Join-Path $selfCheckDir 'selfcheck.ini'
+
+    Test-Case "self-check status is 'NeverRun' when the file doesn't exist yet" {
+        $status = Get-PluginSelfCheckStatus -Path $selfCheckPath
+        Assert-Equal 'NeverRun' $status.Result "self-check Result"
+    }
+
+    Test-Case "self-check status parses a passing run written by the plugin" {
+        Set-Content -LiteralPath $selfCheckPath -Value @(
+            '[SelfCheck]'
+            'Result=Pass'
+            'PotPlayerVersion=1.2.3.4'
+            'Detail='
+        ) -Encoding ascii
+        $status = Get-PluginSelfCheckStatus -Path $selfCheckPath
+        Assert-Equal 'Pass' $status.Result "self-check Result"
+        Assert-Equal '1.2.3.4' $status.PotPlayerVersion "self-check PotPlayerVersion"
+        Assert-Equal '' $status.Detail "self-check Detail"
+    }
+
+    Test-Case "self-check status parses a failing run with its detail" {
+        Set-Content -LiteralPath $selfCheckPath -Value @(
+            '[SelfCheck]'
+            'Result=Fail'
+            'PotPlayerVersion=1.2.3.4'
+            'Detail=Skip Setup dialog: control id 3024 not found'
+        ) -Encoding ascii
+        $status = Get-PluginSelfCheckStatus -Path $selfCheckPath
+        Assert-Equal 'Fail' $status.Result "self-check Result"
+        Assert-Equal 'Skip Setup dialog: control id 3024 not found' $status.Detail "self-check Detail"
+    }
+
+    Test-Case "Get-ProxyStatusReport surfaces the self-check status alongside install state" {
+        $report = Get-ProxyStatusReport -InstallDir $installDir -ProxyPath $proxyBuildPath -SelfCheckPath $selfCheckPath
+        Assert-Equal 'Fail' $report.SelfCheckResult "report SelfCheckResult"
+        Assert-Equal '1.2.3.4' $report.SelfCheckPotPlayerVersion "report SelfCheckPotPlayerVersion"
+    }
+
+    # -----------------------------------------------------------------
     # Scenario: double-install refusal
     # -----------------------------------------------------------------
     Test-Case "double-install is refused and leaves the install untouched" {

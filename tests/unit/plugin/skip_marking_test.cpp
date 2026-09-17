@@ -1,5 +1,6 @@
 #include <catch_amalgamated.hpp>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,11 +22,13 @@ struct FakePlayer {
     bool fileOpen = true;
     Milliseconds positionMs = 0;
     bool nextCommitSucceeds = true;
+    std::optional<std::string> versionUnsupported;
     std::vector<SkipRange> committed;
     std::vector<std::string> osdMessages;
 
     SkipMarkingDriver Driver() {
         return SkipMarkingDriver{
+            .checkVersionSupport = [this] { return versionUnsupported; },
             .isFileOpen = [this] { return fileOpen; },
             .getPositionMs = [this] { return positionMs; },
             .commitRange =
@@ -295,4 +298,47 @@ TEST_CASE("A failed commit shows \"Couldn't save mark\"", "[plugin][skip_marking
     machine.OnAltA();
 
     REQUIRE(player.osdMessages.back() == "Couldn't save mark");
+}
+
+TEST_CASE("Every key is refused with 'unsupported version' when the self-check has failed",
+          "[plugin][skip_marking]") {
+    FakePlayer player;
+    player.versionUnsupported = "main window (class PotPlayer64) not found";
+    SkipMarkingStateMachine machine(player.Driver());
+
+    player.positionMs = 1000;
+    machine.OnAltOpenBracket();
+    player.positionMs = 2000;
+    machine.OnAltCloseBracket();
+    machine.OnAltA();
+
+    REQUIRE(player.committed.empty());
+    REQUIRE(player.osdMessages == std::vector<std::string>{"This PotPlayer version isn't supported",
+                                                             "This PotPlayer version isn't supported",
+                                                             "This PotPlayer version isn't supported"});
+}
+
+TEST_CASE("An unsupported version is checked before the no-file-open guard", "[plugin][skip_marking]") {
+    FakePlayer player;
+    player.fileOpen = false;
+    player.versionUnsupported = "Skip Setup dialog or one of its controls not found";
+    SkipMarkingStateMachine machine(player.Driver());
+
+    machine.OnAltA();
+
+    REQUIRE(player.osdMessages == std::vector<std::string>{"This PotPlayer version isn't supported"});
+}
+
+TEST_CASE("A supported version (the default) doesn't block the normal Alt+[/Alt+]/Alt+A sequence",
+          "[plugin][skip_marking]") {
+    FakePlayer player;
+    SkipMarkingStateMachine machine(player.Driver());
+
+    player.positionMs = 1000;
+    machine.OnAltOpenBracket();
+    player.positionMs = 2000;
+    machine.OnAltCloseBracket();
+    machine.OnAltA();
+
+    REQUIRE(player.committed.size() == 1);
 }

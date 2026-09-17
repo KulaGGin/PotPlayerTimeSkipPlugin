@@ -28,7 +28,8 @@ TEST_CASE("ComposeOsdText renders each event as the issue's example text", "[plu
         Case{OsdMessage{OsdEvent::kMarkEnd, std::nullopt, Milliseconds{1425678}}, "Skip end 00:23:45"},
         Case{OsdMessage{OsdEvent::kSaved, Milliseconds{754567}, Milliseconds{1425678}},
              "Skip 00:12:34 – 00:23:45 saved"},
-        Case{OsdMessage{OsdEvent::kSaveFailed}, "Couldn't save mark"}
+        Case{OsdMessage{OsdEvent::kSaveFailed}, "Couldn't save mark"},
+        Case{OsdMessage{OsdEvent::kUnsupportedVersion}, "This PotPlayer version isn't supported"}
     );
 
     CAPTURE(static_cast<int>(testCase.message.event));

@@ -130,6 +130,17 @@ struct MissingSkipIntervalControl {
 std::variant<SkipIntervalControls, MissingSkipIntervalControl> ResolveSkipIntervalControls(
     const std::function<std::uintptr_t(int)>& lookup);
 
+// PTS-017: opens Skip Interval Setup via `dialog`'s Add... button, resolves
+// its controls, and Cancels it either way — never fills in a field, never
+// clicks OK, never commits a probe range. Used by the self-check to verify
+// this dialog's control ids still match docs/FINDINGS.md section 3 without
+// writing anything. `dialog` (Skip Setup itself) is left open either way,
+// same contract as AddFileSpecificSkipRange. Returns nullopt if every
+// control resolved, or a human-readable detail on the first thing that
+// didn't: Add... failing to open the dialog, the dialog not appearing
+// within the timeout, or a specific missing control id.
+std::optional<std::string> CheckSkipIntervalControls(const SkipSetupDialog& dialog);
+
 // One field of what was WM_SETTEXT/CB_SETCURSEL'd into Skip Interval Setup
 // that didn't read back (via WM_GETTEXT/CB_GETCURSEL) as requested.
 struct SkipIntervalMismatch {

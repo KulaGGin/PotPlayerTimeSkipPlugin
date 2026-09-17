@@ -27,6 +27,8 @@ std::string ComposeOsdText(const OsdMessage& message) {
                core::FormatTimecodeShort(*message.endMs) + " saved";
     case OsdEvent::kSaveFailed:
         return "Couldn't save mark";
+    case OsdEvent::kUnsupportedVersion:
+        return "This PotPlayer version isn't supported";
     }
     return {};
 }

@@ -2,7 +2,10 @@
 
 #include <windows.h>
 
+#include <winver.h>
+
 #include <atomic>
+#include <vector>
 
 #include "diagnostics/log.hpp"
 #include "plugin/window.hpp"
@@ -81,6 +84,41 @@ bool IsFileOpen() {
 
 std::uintptr_t GetMainWindowHandle() {
     return reinterpret_cast<std::uintptr_t>(ResolveMainWindow());
+}
+
+std::optional<std::string> GetPotPlayerVersion() {
+    const HMODULE module = GetModuleHandleW(L"PotPlayer64.dll");
+    if (module == nullptr) {
+        return std::nullopt;
+    }
+
+    wchar_t path[MAX_PATH];
+    const DWORD pathLength = GetModuleFileNameW(module, path, static_cast<DWORD>(std::size(path)));
+    if (pathLength == 0 || pathLength >= std::size(path)) {
+        return std::nullopt;
+    }
+
+    DWORD unusedHandle = 0;
+    const DWORD infoSize = GetFileVersionInfoSizeW(path, &unusedHandle);
+    if (infoSize == 0) {
+        return std::nullopt;
+    }
+    std::vector<BYTE> buffer(infoSize);
+    if (!GetFileVersionInfoW(path, 0, infoSize, buffer.data())) {
+        return std::nullopt;
+    }
+
+    VS_FIXEDFILEINFO* fixedInfo = nullptr;
+    UINT fixedInfoLen = 0;
+    if (!VerQueryValueW(buffer.data(), L"\\", reinterpret_cast<LPVOID*>(&fixedInfo), &fixedInfoLen) ||
+        fixedInfo == nullptr) {
+        return std::nullopt;
+    }
+
+    return std::to_string(HIWORD(fixedInfo->dwFileVersionMS)) + "." +
+           std::to_string(LOWORD(fixedInfo->dwFileVersionMS)) + "." +
+           std::to_string(HIWORD(fixedInfo->dwFileVersionLS)) + "." +
+           std::to_string(LOWORD(fixedInfo->dwFileVersionLS));
 }
 
 }  // namespace plugin
