@@ -35,6 +35,13 @@ public:
 std::string FormatTimecode(Milliseconds ms);
 Milliseconds ParseTimecode(std::string_view text);
 
+// The display-friendly cut of FormatTimecode's own "HH:MM:SS.mmm" — just
+// "HH:MM:SS", no sub-second precision. PTS-015's OSD text uses this so
+// on-screen feedback reads as a plain timestamp rather than the dialog's
+// exact-round-trip format. Same negative-ms rejection as FormatTimecode,
+// since it's implemented in terms of it.
+std::string FormatTimecodeShort(Milliseconds ms);
+
 // A validated skip range [startMs, endMs) in milliseconds. The only way to
 // get one is Create(), which throws ParseError on a negative start or a
 // range that is not strictly forward (endMs <= startMs covers both the

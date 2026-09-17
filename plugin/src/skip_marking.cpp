@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "diagnostics/log.hpp"
+#include "plugin/osd.hpp"
 #include "plugin/player_window.hpp"
 #include "plugin/skip_setup.hpp"
 
@@ -39,6 +40,7 @@ SkipMarkingDriver MakeLiveSkipMarkingDriver() {
         .isFileOpen = &IsFileOpen,
         .getPositionMs = &GetPositionMs,
         .commitRange = &CommitRangeLive,
+        .showOsd = &ShowOsdLive,
     };
 }
 
@@ -51,15 +53,18 @@ void SkipMarkingStateMachine::StartNewEntry() {
 void SkipMarkingStateMachine::OnAltA() {
     if (!driver_.isFileOpen()) {
         LOG_WARN("skip-marking: Alt+A ignored, no file open");
+        driver_.showOsd(ComposeOsdText({OsdEvent::kNoFileOpen}));
         return;
     }
     StartNewEntry();
     LOG_INFO("skip-marking: Alt+A, new entry started");
+    driver_.showOsd(ComposeOsdText({OsdEvent::kNewMark}));
 }
 
 void SkipMarkingStateMachine::OnAltOpenBracket() {
     if (!driver_.isFileOpen()) {
         LOG_WARN("skip-marking: Alt+[ ignored, no file open");
+        driver_.showOsd(ComposeOsdText({OsdEvent::kNoFileOpen}));
         return;
     }
     if (!active_) {
@@ -70,17 +75,21 @@ void SkipMarkingStateMachine::OnAltOpenBracket() {
     if (active_->endMs && pos >= *active_->endMs) {
         LOG_WARN("skip-marking: Alt+[ at {} would not be before the set end {}, ignored", pos,
                   *active_->endMs);
+        driver_.showOsd(ComposeOsdText({OsdEvent::kMarkIgnored}));
         return;
     }
 
     active_->startMs = pos;
     LOG_INFO("skip-marking: Alt+[, start set to {}", pos);
-    TryCommit();
+    if (!TryCommit()) {
+        driver_.showOsd(ComposeOsdText({OsdEvent::kMarkStart, pos}));
+    }
 }
 
 void SkipMarkingStateMachine::OnAltCloseBracket() {
     if (!driver_.isFileOpen()) {
         LOG_WARN("skip-marking: Alt+] ignored, no file open");
+        driver_.showOsd(ComposeOsdText({OsdEvent::kNoFileOpen}));
         return;
     }
     if (!active_) {
@@ -91,26 +100,32 @@ void SkipMarkingStateMachine::OnAltCloseBracket() {
     if (active_->startMs && pos <= *active_->startMs) {
         LOG_WARN("skip-marking: Alt+] at {} would not be after the set start {}, ignored", pos,
                   *active_->startMs);
+        driver_.showOsd(ComposeOsdText({OsdEvent::kMarkIgnored}));
         return;
     }
 
     active_->endMs = pos;
     LOG_INFO("skip-marking: Alt+], end set to {}", pos);
-    TryCommit();
+    if (!TryCommit()) {
+        driver_.showOsd(ComposeOsdText({OsdEvent::kMarkEnd, std::nullopt, pos}));
+    }
 }
 
-void SkipMarkingStateMachine::TryCommit() {
+bool SkipMarkingStateMachine::TryCommit() {
     if (!active_->startMs || !active_->endMs) {
-        return;
+        return false;
     }
 
     const core::SkipRange range = core::SkipRange::Create(*active_->startMs, *active_->endMs);
     if (driver_.commitRange(range)) {
         LOG_INFO("skip-marking: committed [{}, {})", range.StartMs(), range.EndMs());
+        driver_.showOsd(ComposeOsdText({OsdEvent::kSaved, range.StartMs(), range.EndMs()}));
     } else {
         LOG_ERROR("skip-marking: failed to commit [{}, {})", range.StartMs(), range.EndMs());
+        driver_.showOsd(ComposeOsdText({OsdEvent::kSaveFailed}));
     }
     active_.reset();
+    return true;
 }
 
 }  // namespace plugin

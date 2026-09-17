@@ -494,3 +494,50 @@ reintroduce PTS-006's loader-lock deadlock. Live confirmation against a
 real PotPlayer session (does a keypress actually reach `HandleAltA`/etc.,
 does the foreground gate actually suppress it when unfocused) is
 PTS-018's job, per this issue's own "Tests" section.
+
+**Measured, live, as a side effect of PTS-015's own live test (see section
+9):** with the PTS-015 proxy build installed and a real PotPlayer session
+open, all three hotkeys were pressed by hand and reached the state machine
+— `plugin.log` shows the expected `Alt+A`/`Alt+[`/`Alt+]` sequence with
+real captured playback positions, not synthetic ones. This is incidental
+confirmation that the live dispatch path works end-to-end; it doesn't
+specifically exercise the foreground-gate-suppresses-when-unfocused case,
+which is still PTS-018's job.
+
+## 9. On-screen feedback / OSD (PTS-015)
+
+**Investigated, not found:** whether PotPlayer exposes any `SendMessage`/
+`WM_COMMAND` channel for showing arbitrary custom OSD text. A resource-only
+scan of `PotPlayer64.dll` (`LoadLibraryExW(..., LOAD_LIBRARY_AS_DATAFILE)`,
+no code from the DLL ever executes, then walking every `RT_STRING` table —
+2308 strings total) turned up exactly one hit for "osd": `메시지(OSD) 설정`
+("Message (OSD) settings"), a settings-dialog entry, not a command id or an
+API. No AutoHotkey-community documentation of an OSD-text `WM_USER` code
+was found either (the same community that documented the position/duration/
+status codes in section 4). **Conclusion: no native channel found** — this
+ships the issue's own fallback design instead, a self-drawn overlay.
+
+**Design chosen:** a single reusable Win32 popup window
+(`WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST |
+WS_EX_NOACTIVATE`, `WS_POPUP`), created fresh for each message and
+self-destroyed on an internal `SetTimer`/`WM_TIMER` after ~1.8s. Whole-window
+alpha via `SetLayeredWindowAttributes(..., LWA_ALPHA)` rather than
+`UpdateLayeredWindow`'s per-pixel alpha DIB — a flat translucent panel with
+GDI-drawn text is much less failure-prone to implement correctly than
+premultiplied-alpha compositing, at the cost of slightly less smooth text
+edges against the video than a true per-pixel-alpha toast would have; not
+revisited unless it looks wrong live.
+
+**Threading:** deliberately hosted on PTS-013's existing hotkey pump thread,
+not a new one — that thread already runs a `PeekMessageW`/`DispatchMessageW`
+loop draining every message for the thread (not just `WM_HOTKEY`), which is
+exactly what a normal window needs to receive its own `WM_PAINT`/`WM_TIMER`.
+`MsgWaitForMultipleObjects`'s `QS_ALLINPUT` wake mask already covers
+`QS_TIMER`, so no change was needed there.
+
+**Measured, live (proxy installed, real PotPlayer session, synthetic
+ffmpeg-generated test clip):** all three hotkeys produced a visible toast
+positioned over the player window with the expected text (new mark / start
+set / saved), auto-dismissed on their own, never stole focus, and didn't
+interfere with playback. Confirmed by the person driving the session
+directly, not just via the log.

@@ -3,6 +3,7 @@
 #include "core/core.hpp"
 
 using core::FormatTimecode;
+using core::FormatTimecodeShort;
 using core::ParseError;
 using core::ParseTimecode;
 
@@ -33,6 +34,28 @@ TEST_CASE("FormatTimecode renders ms as HH:MM:SS.mmm", "[core][timecode]") {
 
 TEST_CASE("FormatTimecode rejects a negative duration", "[core][timecode]") {
     REQUIRE_THROWS_AS(FormatTimecode(-1), ParseError);
+}
+
+TEST_CASE("FormatTimecodeShort drops the .mmm suffix", "[core][timecode]") {
+    struct Case {
+        core::Milliseconds ms;
+        const char* expected;
+    };
+
+    const auto [ms, expected] = GENERATE(
+        Case{0, "00:00:00"},
+        Case{999, "00:00:00"},
+        Case{754567, "00:12:34"},
+        Case{3661001, "01:01:01"},
+        Case{360000000, "100:00:00"}
+    );
+
+    CAPTURE(ms);
+    REQUIRE(FormatTimecodeShort(ms) == expected);
+}
+
+TEST_CASE("FormatTimecodeShort rejects a negative duration", "[core][timecode]") {
+    REQUIRE_THROWS_AS(FormatTimecodeShort(-1), ParseError);
 }
 
 TEST_CASE("ParseTimecode parses HH:MM:SS.mmm to ms", "[core][timecode]") {

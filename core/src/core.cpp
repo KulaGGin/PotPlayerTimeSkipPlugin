@@ -63,6 +63,11 @@ std::string FormatTimecode(Milliseconds ms) {
     return std::string(buffer, static_cast<std::size_t>(written));
 }
 
+std::string FormatTimecodeShort(Milliseconds ms) {
+    const std::string full = FormatTimecode(ms);
+    return full.substr(0, full.find('.'));
+}
+
 Milliseconds ParseTimecode(std::string_view text) {
     const auto firstColon = text.find(':');
     if (firstColon == std::string_view::npos) {

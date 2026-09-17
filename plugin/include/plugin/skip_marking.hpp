@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <optional>
+#include <string>
 
 #include "core/core.hpp"
 
@@ -28,6 +29,10 @@ struct SkipMarkingDriver {
     // Returns false (already logged by the caller) if any step failed; the
     // state machine never inspects which step it was.
     std::function<bool(const core::SkipRange&)> commitRange;
+    // PTS-015: shows one already-composed OSD line for the event that just
+    // happened. Never inspected or awaited by the state machine — same
+    // fire-and-forget shape as the LOG_* calls next to every call site.
+    std::function<void(const std::string&)> showOsd;
 };
 
 // The real driver: plugin::IsFileOpen/GetPositionMs for the queries, and
@@ -79,7 +84,12 @@ private:
     };
 
     void StartNewEntry();
-    void TryCommit();
+    // Commits and closes the active entry if both bounds are now set,
+    // showing the saved/failed OSD itself since it's the only place that
+    // knows the outcome. Returns whether it did so, so OnAltOpenBracket/
+    // OnAltCloseBracket know whether to show their own "start/end set" OSD
+    // instead — never both for the same keypress.
+    bool TryCommit();
 
     SkipMarkingDriver driver_;
     std::optional<ActiveEntry> active_;

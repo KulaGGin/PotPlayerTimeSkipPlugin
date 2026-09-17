@@ -1,5 +1,6 @@
 #include <catch_amalgamated.hpp>
 
+#include <string>
 #include <vector>
 
 #include "core/core.hpp"
@@ -21,6 +22,7 @@ struct FakePlayer {
     Milliseconds positionMs = 0;
     bool nextCommitSucceeds = true;
     std::vector<SkipRange> committed;
+    std::vector<std::string> osdMessages;
 
     SkipMarkingDriver Driver() {
         return SkipMarkingDriver{
@@ -34,6 +36,7 @@ struct FakePlayer {
                     committed.push_back(range);
                     return true;
                 },
+            .showOsd = [this](const std::string& text) { osdMessages.push_back(text); },
         };
     }
 };
@@ -224,4 +227,75 @@ TEST_CASE("A failed commit still closes the entry, so the next one starts clean"
     REQUIRE(player.committed.size() == 1);
     REQUIRE(player.committed[0].StartMs() == 7000);
     REQUIRE(player.committed[0].EndMs() == 8000);
+}
+
+TEST_CASE("The normal Alt+A/[/] sequence shows exactly one OSD line per keypress",
+          "[plugin][skip_marking][osd]") {
+    FakePlayer player;
+    SkipMarkingStateMachine machine(player.Driver());
+
+    machine.OnAltA();
+    player.positionMs = 754567;
+    machine.OnAltOpenBracket();
+    player.positionMs = 1425678;
+    machine.OnAltCloseBracket();
+
+    REQUIRE(player.osdMessages == std::vector<std::string>{
+                                       "Skip: new mark",
+                                       "Skip start 00:12:34",
+                                       "Skip 00:12:34 – 00:23:45 saved",
+                                   });
+}
+
+TEST_CASE("Setting the end before the start shows 'Skip end', not a premature save",
+          "[plugin][skip_marking][osd]") {
+    FakePlayer player;
+    SkipMarkingStateMachine machine(player.Driver());
+
+    player.positionMs = 4000;
+    machine.OnAltCloseBracket();  // no start yet: shows "end set", no commit
+
+    REQUIRE(player.osdMessages == std::vector<std::string>{"Skip end 00:00:04"});
+    REQUIRE(player.committed.empty());
+}
+
+TEST_CASE("A hotkey with no file open shows 'No file open' instead of acting",
+          "[plugin][skip_marking][osd]") {
+    FakePlayer player;
+    player.fileOpen = false;
+    SkipMarkingStateMachine machine(player.Driver());
+
+    machine.OnAltA();
+    machine.OnAltOpenBracket();
+    machine.OnAltCloseBracket();
+
+    REQUIRE(player.osdMessages == std::vector<std::string>{"No file open", "No file open", "No file open"});
+}
+
+TEST_CASE("An out-of-order bound that would invert the range shows 'ignored', not a silent no-op",
+          "[plugin][skip_marking][osd]") {
+    FakePlayer player;
+    SkipMarkingStateMachine machine(player.Driver());
+
+    machine.OnAltA();
+    player.positionMs = 5000;
+    machine.OnAltOpenBracket();
+    player.positionMs = 4000;  // before start: rejected
+    machine.OnAltCloseBracket();
+
+    REQUIRE(player.osdMessages.back() == "Skip mark ignored (invalid range)");
+}
+
+TEST_CASE("A failed commit shows \"Couldn't save mark\"", "[plugin][skip_marking][osd]") {
+    FakePlayer player;
+    player.nextCommitSucceeds = false;
+    SkipMarkingStateMachine machine(player.Driver());
+
+    machine.OnAltA();
+    player.positionMs = 1000;
+    machine.OnAltOpenBracket();
+    player.positionMs = 2000;
+    machine.OnAltCloseBracket();
+
+    REQUIRE(player.osdMessages.back() == "Couldn't save mark");
 }

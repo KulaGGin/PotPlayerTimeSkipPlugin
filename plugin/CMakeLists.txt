@@ -3,6 +3,7 @@ add_library(plugin STATIC
     src/window_enum.cpp
     src/player_window.cpp
     src/skip_setup.cpp
+    src/osd.cpp
     src/skip_marking.cpp
     src/hotkeys.cpp
     src/hotkey_pump.cpp

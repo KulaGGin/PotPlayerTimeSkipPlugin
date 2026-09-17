@@ -10,6 +10,7 @@ add_executable(unit_tests
     unit/plugin/window_test.cpp
     unit/plugin/skip_setup_test.cpp
     unit/plugin/hotkeys_test.cpp
+    unit/plugin/osd_test.cpp
     unit/plugin/skip_marking_test.cpp
 )
 
