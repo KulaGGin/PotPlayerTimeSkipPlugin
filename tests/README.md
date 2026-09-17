@@ -2,6 +2,11 @@
 
 `unit_tests` — the native unit-test suite, built and run via CTest.
 
+`tests/integration/` — PTS-018's **opt-in** end-to-end suite against a live
+PotPlayer, verifying the `.pbf` on disk. Not part of CTest or the fast unit
+run; see [`tests/integration/README.md`](integration/README.md) for
+prerequisites and how to run it.
+
 ## Framework
 
 [Catch2](https://github.com/catchorg/Catch2) v3.7.1, vendored as its
