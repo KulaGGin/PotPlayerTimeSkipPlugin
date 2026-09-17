@@ -287,6 +287,19 @@ HWND WaitForSkipIntervalSetup() {
     return nullptr;
 }
 
+bool WaitForItemCount(HWND rangeList, int expectedCount) {
+    const ULONGLONG deadline = GetTickCount64() + kCloseTimeoutMs;
+    for (;;) {
+        if (SendMessageW(rangeList, LVM_GETITEMCOUNT, 0, 0) == expectedCount) {
+            return true;
+        }
+        if (GetTickCount64() >= deadline) {
+            return false;
+        }
+        Sleep(kPollIntervalMs);
+    }
+}
+
 bool PostIntervalButtonAndWaitClosed(HWND interval, int buttonId, HWND buttonHandle) {
     if (!PostMessageW(interval, WM_COMMAND, MAKEWPARAM(buttonId, BN_CLICKED), reinterpret_cast<LPARAM>(buttonHandle))) {
         LOG_ERROR("plugin: PostMessage(Skip Interval Setup button {}) failed, gle={}", buttonId, GetLastError());
@@ -485,6 +498,102 @@ bool AddFileSpecificSkipRange(const SkipSetupDialog& dialog, const core::SkipRan
     if (countAfter != countBefore + 1) {
         LOG_ERROR("plugin: Skip Setup range list count went from {} to {} after Add (expected +1)", countBefore,
                    countAfter);
+        return false;
+    }
+    return true;
+}
+
+std::optional<int> ResolveSkipRangeIndexToDelete(int index, int count) {
+    if (index < 0 || index >= count) {
+        return std::nullopt;
+    }
+    return index;
+}
+
+bool DeleteSkipRange(const SkipSetupDialog& dialog, int index) {
+    const HWND setupHwnd = reinterpret_cast<HWND>(dialog.hwnd);
+    const HWND rangeList = reinterpret_cast<HWND>(dialog.controls.rangeList);
+    const HWND deleteButton = reinterpret_cast<HWND>(dialog.controls.deleteButton);
+
+    const int countBefore = static_cast<int>(SendMessageW(rangeList, LVM_GETITEMCOUNT, 0, 0));
+    const auto resolved = ResolveSkipRangeIndexToDelete(index, countBefore);
+    if (!resolved) {
+        LOG_ERROR("plugin: DeleteSkipRange index {} is out of range for a list of {}", index, countBefore);
+        return false;
+    }
+
+    // LVM_SETITEMSTATE, not keyboard-navigation PostMessages: deterministic
+    // regardless of the list's current selection/focus, no reliance on
+    // repeat counts or where the caret happens to already be (PTS-012
+    // design notes). Clear any existing selection first (iItem = -1 applies
+    // the state to every item), then select+focus exactly the target row.
+    ListView_SetItemState(rangeList, -1, 0, LVIS_SELECTED);
+    ListView_SetItemState(rangeList, *resolved, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+
+    // PostMessage, matching every other Skip Setup button click in this
+    // file: Delete isn't known to run a modal DialogBox loop the way
+    // Add...'s handler does (docs/FINDINGS.md section 6), but posting costs
+    // nothing and keeps this call sequence uniform with Add/OK/Cancel.
+    if (!PostMessageW(setupHwnd, WM_COMMAND, MAKEWPARAM(kDeleteButtonId, BN_CLICKED),
+                       reinterpret_cast<LPARAM>(deleteButton))) {
+        LOG_ERROR("plugin: PostMessage(Skip Setup Delete) failed, gle={}", GetLastError());
+        return false;
+    }
+
+    if (!WaitForItemCount(rangeList, countBefore - 1)) {
+        LOG_ERROR("plugin: Skip Setup range list count did not drop to {} within {} ms after Delete", countBefore - 1,
+                   kCloseTimeoutMs);
+        return false;
+    }
+    return true;
+}
+
+bool RunClearAllLoop(int initialCount, const std::function<std::optional<int>()>& deleteFirst) {
+    if (initialCount <= 0) {
+        return true;
+    }
+    int remaining = initialCount;
+    for (int i = 0; i < initialCount; ++i) {
+        const auto countAfter = deleteFirst();
+        if (!countAfter) {
+            return false;
+        }
+        remaining = *countAfter;
+        if (remaining == 0) {
+            return true;
+        }
+    }
+    return remaining == 0;
+}
+
+bool ClearAllSkipRanges(const SkipSetupDialog& dialog) {
+    const HWND rangeList = reinterpret_cast<HWND>(dialog.controls.rangeList);
+    const int initialCount = static_cast<int>(SendMessageW(rangeList, LVM_GETITEMCOUNT, 0, 0));
+    return RunClearAllLoop(initialCount, [&dialog, rangeList]() -> std::optional<int> {
+        if (!DeleteSkipRange(dialog, 0)) {
+            return std::nullopt;
+        }
+        return static_cast<int>(SendMessageW(rangeList, LVM_GETITEMCOUNT, 0, 0));
+    });
+}
+
+bool EnsureSkipEnabled(const SkipSetupDialog& dialog) {
+    const HWND checkbox = reinterpret_cast<HWND>(dialog.controls.enableCheckbox);
+
+    if (SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+        return true;
+    }
+
+    LOG_INFO("plugin: Skip Setup's Enable skip feature was off — turning it on so added ranges take effect");
+
+    // BM_CLICK, not a posted WM_COMMAND: this is a plain checkbox, not a
+    // button whose handler opens a modal dialog (unlike Add.../OK/Cancel —
+    // docs/FINDINGS.md section 6), so SendMessage is safe here and lets the
+    // read-back below run synchronously right after.
+    SendMessageW(checkbox, BM_CLICK, 0, 0);
+
+    if (SendMessageW(checkbox, BM_GETCHECK, 0, 0) != BST_CHECKED) {
+        LOG_ERROR("plugin: Skip Setup's Enable skip feature checkbox did not read back checked after BM_CLICK");
         return false;
     }
     return true;

@@ -23,7 +23,9 @@ using plugin::kRangeListId;
 using plugin::MissingSkipIntervalControl;
 using plugin::MissingSkipSetupControl;
 using plugin::ResolveSkipIntervalControls;
+using plugin::ResolveSkipRangeIndexToDelete;
 using plugin::ResolveSkipSetupControls;
+using plugin::RunClearAllLoop;
 using plugin::SkipIntervalControls;
 using plugin::SkipIntervalReadback;
 using plugin::SkipSetupControls;
@@ -163,4 +165,80 @@ TEST_CASE("VerifySkipIntervalReadback rejects start/end text that doesn't even p
     REQUIRE(mismatch.has_value());
     REQUIRE(mismatch->field == "start");
     REQUIRE(mismatch->actual == "garbage");
+}
+
+TEST_CASE("ResolveSkipRangeIndexToDelete maps an in-range index straight through",
+          "[plugin][skip_setup]") {
+    REQUIRE(ResolveSkipRangeIndexToDelete(0, 3) == 0);
+    REQUIRE(ResolveSkipRangeIndexToDelete(2, 3) == 2);
+}
+
+TEST_CASE("ResolveSkipRangeIndexToDelete rejects an index at or beyond the count",
+          "[plugin][skip_setup]") {
+    REQUIRE_FALSE(ResolveSkipRangeIndexToDelete(3, 3).has_value());
+    REQUIRE_FALSE(ResolveSkipRangeIndexToDelete(5, 3).has_value());
+}
+
+TEST_CASE("ResolveSkipRangeIndexToDelete rejects a negative index",
+          "[plugin][skip_setup]") {
+    REQUIRE_FALSE(ResolveSkipRangeIndexToDelete(-1, 3).has_value());
+}
+
+TEST_CASE("ResolveSkipRangeIndexToDelete rejects any index into an empty list",
+          "[plugin][skip_setup]") {
+    REQUIRE_FALSE(ResolveSkipRangeIndexToDelete(0, 0).has_value());
+}
+
+TEST_CASE("RunClearAllLoop is a no-op on an already-empty list", "[plugin][skip_setup]") {
+    int calls = 0;
+    const bool result = RunClearAllLoop(0, [&calls]() -> std::optional<int> {
+        ++calls;
+        return 0;
+    });
+    REQUIRE(result);
+    REQUIRE(calls == 0);
+}
+
+TEST_CASE("RunClearAllLoop drains a shrinking synthetic count down to zero", "[plugin][skip_setup]") {
+    int remaining = 3;
+    int calls = 0;
+    const bool result = RunClearAllLoop(3, [&remaining, &calls]() -> std::optional<int> {
+        ++calls;
+        --remaining;
+        return remaining;
+    });
+    REQUIRE(result);
+    REQUIRE(calls == 3);
+    REQUIRE(remaining == 0);
+}
+
+TEST_CASE("RunClearAllLoop stops early once the count reaches zero", "[plugin][skip_setup]") {
+    int calls = 0;
+    const bool result = RunClearAllLoop(5, [&calls]() -> std::optional<int> {
+        ++calls;
+        return 0;
+    });
+    REQUIRE(result);
+    REQUIRE(calls == 1);
+}
+
+TEST_CASE("RunClearAllLoop stops and reports failure if deleteFirst fails", "[plugin][skip_setup]") {
+    int calls = 0;
+    const bool result = RunClearAllLoop(3, [&calls]() -> std::optional<int> {
+        ++calls;
+        return std::nullopt;
+    });
+    REQUIRE_FALSE(result);
+    REQUIRE(calls == 1);
+}
+
+TEST_CASE("RunClearAllLoop terminates within initialCount iterations even if the count never shrinks",
+          "[plugin][skip_setup]") {
+    int calls = 0;
+    const bool result = RunClearAllLoop(4, [&calls]() -> std::optional<int> {
+        ++calls;
+        return 4;  // deleteFirst reports success but the count never actually moves.
+    });
+    REQUIRE_FALSE(result);
+    REQUIRE(calls == 4);
 }

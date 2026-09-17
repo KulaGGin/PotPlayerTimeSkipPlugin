@@ -181,4 +181,46 @@ std::optional<SkipIntervalMismatch> VerifySkipIntervalReadback(const core::SkipR
 // caller can batch several adds before its own final OK/Cancel.
 bool AddFileSpecificSkipRange(const SkipSetupDialog& dialog, const core::SkipRange& range);
 
+// Maps a caller-requested delete index against the range list's current
+// item count (read moments earlier via LVM_GETITEMCOUNT). Returns `index`
+// unchanged if it's in range, or nullopt if it isn't — checked here rather
+// than left to surface as an ambiguous failure downstream: LVM_SETITEMSTATE
+// silently no-ops on an out-of-range index instead of failing loudly.
+std::optional<int> ResolveSkipRangeIndexToDelete(int index, int count);
+
+// Selects exactly `index` in the range list (deselecting everything else)
+// and clicks Delete, waiting (bounded) for the list's item count to drop by
+// exactly one. `index` must be valid for a freshly read LVM_GETITEMCOUNT —
+// checked via ResolveSkipRangeIndexToDelete before any control is touched.
+// Only ever removes the one row the caller asked for (PTS-012 — "only ever
+// remove what the caller explicitly asked to remove"); never touches any
+// other range. Deleting the last remaining range makes PotPlayer delete the
+// whole .pbf file itself (docs/FINDINGS.md section 1) — nothing here
+// touches the file directly.
+bool DeleteSkipRange(const SkipSetupDialog& dialog, int index);
+
+// Runs the clear-all loop: repeatedly asks `deleteFirst` to remove item 0
+// and report the resulting count, until the count reaches zero or
+// `deleteFirst` reports failure (nullopt). Bounded by `initialCount`
+// iterations regardless of what `deleteFirst` reports, so a count that
+// doesn't shrink as expected can't spin the loop forever. An `initialCount`
+// of zero (already-empty list) never calls `deleteFirst` at all — clear-all
+// is idempotent by construction. Injected as a callback so this
+// termination logic is unit-testable against synthetic counts, no live
+// SysListView32 needed.
+bool RunClearAllLoop(int initialCount, const std::function<std::optional<int>()>& deleteFirst);
+
+// Empties the range list by repeatedly deleting row 0 (via DeleteSkipRange)
+// until it's empty (PTS-012's clear-all). No-op, returning true, if the
+// list is already empty.
+bool ClearAllSkipRanges(const SkipSetupDialog& dialog);
+
+// Reads Skip Setup's "Enable skip feature" checkbox (BM_GETCHECK) and, if
+// it's off, clicks it on (BM_CLICK) and logs that this happened — a switch
+// that suppresses every range we add must be surfaced, never allowed to
+// fail silently (PTS-012). Returns true once the checkbox reads back
+// checked (whether it already was, or was just turned on); false (logged)
+// if it still doesn't read back checked after the click.
+bool EnsureSkipEnabled(const SkipSetupDialog& dialog);
+
 }
