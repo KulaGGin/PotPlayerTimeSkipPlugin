@@ -4,40 +4,29 @@
 
 #include "diagnostics/log.hpp"
 #include "plugin/hotkeys.hpp"
+#include "plugin/skip_marking.hpp"
 
 namespace plugin {
 
 namespace {
 
-// Named handler stubs the routing table dispatches to. What each one
-// actually does is PTS-014's job (explicitly out of scope for PTS-013) —
-// these just prove the press->handler wiring works, and are where PTS-014
-// hangs its real logic. Deliberately fast/non-blocking (a log line): the
-// dialog-driving work PTS-014 adds here later takes a beat, so it must be
-// queued off this thread rather than run inline, or a rapid Alt+[ then
-// Alt+] would stall behind it and risk dropping the second press.
-void HandleAltA() {
-    LOG_INFO("hotkeys: Alt+A pressed");
-}
-
-void HandleAltOpenBracket() {
-    LOG_INFO("hotkeys: Alt+[ pressed");
-}
-
-void HandleAltCloseBracket() {
-    LOG_INFO("hotkeys: Alt+] pressed");
-}
-
-void Invoke(HotkeyAction action) {
+// Routes a resolved press straight into the PTS-014 state machine. Kept
+// fast/non-blocking here: the dialog-driving work only happens once a
+// range actually completes (TryCommit), and even then it runs inline on
+// this same pump thread — a rapid Alt+[ then Alt+] between two different
+// entries can't interleave since WM_HOTKEY messages are handled one at a
+// time in press order, and a single entry's own two presses are exactly
+// what triggers that one dialog round trip.
+void Invoke(SkipMarkingStateMachine& machine, HotkeyAction action) {
     switch (action) {
     case HotkeyAction::kAltA:
-        HandleAltA();
+        machine.OnAltA();
         return;
     case HotkeyAction::kAltOpenBracket:
-        HandleAltOpenBracket();
+        machine.OnAltOpenBracket();
         return;
     case HotkeyAction::kAltCloseBracket:
-        HandleAltCloseBracket();
+        machine.OnAltCloseBracket();
         return;
     }
 }
@@ -99,13 +88,13 @@ void UnregisterHotkeys(const RegisteredHotkeys& registered) {
 // rapid presses is fully processed before the loop goes back to waiting —
 // what actually satisfies PTS-013's "rapid successive presses are not
 // silently dropped" for today's fast/non-blocking handlers above.
-void DrainMessageQueue() {
+void DrainMessageQueue(SkipMarkingStateMachine& machine) {
     MSG msg;
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_HOTKEY) {
             const auto action = ResolveHotkeyAction(static_cast<int>(msg.wParam));
             if (action && IsPotPlayerForeground()) {
-                Invoke(*action);
+                Invoke(machine, *action);
             }
             continue;
         }
@@ -118,6 +107,7 @@ void DrainMessageQueue() {
 
 void RunHotkeyPump(HANDLE stopEvent) {
     const RegisteredHotkeys registered = RegisterHotkeys();
+    SkipMarkingStateMachine machine(MakeLiveSkipMarkingDriver());
     LOG_INFO("hotkeys: pump started");
 
     for (;;) {
@@ -133,7 +123,7 @@ void RunHotkeyPump(HANDLE stopEvent) {
             LOG_ERROR("hotkeys: MsgWaitForMultipleObjects failed, gle={}", GetLastError());
             break;
         }
-        DrainMessageQueue();
+        DrainMessageQueue(machine);
     }
 
     LOG_INFO("hotkeys: pump stopping");
