@@ -13,10 +13,11 @@ namespace {
 
 // The full PTS-010/011/012 round trip a single committed range needs: open
 // Skip Setup, make sure the feature is actually enabled (a range added
-// while it's off would silently never skip anything), add the range, and
-// OK the dialog. Cancels instead of OK-ing on any failure, so a
-// half-verified add is never left sitting in an open dialog.
-bool CommitRangeLive(const core::SkipRange& range) {
+// while it's off would silently never skip anything) unless PTS-016's
+// config says not to auto-enable it, add the range, and OK the dialog.
+// Cancels instead of OK-ing on any failure, so a half-verified add is never
+// left sitting in an open dialog.
+bool CommitRangeLive(const core::SkipRange& range, bool autoEnableSkip) {
     const auto dialog = OpenSkipSetup();
     if (!dialog) {
         LOG_ERROR("skip-marking: could not open Skip Setup to commit [{}, {})", range.StartMs(),
@@ -24,7 +25,7 @@ bool CommitRangeLive(const core::SkipRange& range) {
         return false;
     }
 
-    bool ok = EnsureSkipEnabled(*dialog) && AddFileSpecificSkipRange(*dialog, range);
+    bool ok = (!autoEnableSkip || EnsureSkipEnabled(*dialog)) && AddFileSpecificSkipRange(*dialog, range);
     if (ok) {
         ok = CloseSkipSetupOk(*dialog);
     } else {
@@ -35,11 +36,11 @@ bool CommitRangeLive(const core::SkipRange& range) {
 
 }  // namespace
 
-SkipMarkingDriver MakeLiveSkipMarkingDriver() {
+SkipMarkingDriver MakeLiveSkipMarkingDriver(bool autoEnableSkip) {
     return SkipMarkingDriver{
         .isFileOpen = &IsFileOpen,
         .getPositionMs = &GetPositionMs,
-        .commitRange = &CommitRangeLive,
+        .commitRange = [autoEnableSkip](const core::SkipRange& range) { return CommitRangeLive(range, autoEnableSkip); },
         .showOsd = &ShowOsdLive,
     };
 }

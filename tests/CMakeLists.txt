@@ -6,6 +6,7 @@ add_executable(unit_tests
     unit/core/skip_range_test.cpp
     unit/core/pbf_test.cpp
     unit/core/human_input_test.cpp
+    unit/core/config_test.cpp
     unit/diagnostics/format_test.cpp
     unit/plugin/window_test.cpp
     unit/plugin/skip_setup_test.cpp

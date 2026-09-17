@@ -3,7 +3,9 @@
 #include <iterator>
 
 #include "diagnostics/log.hpp"
+#include "plugin/config.hpp"
 #include "plugin/hotkeys.hpp"
+#include "plugin/osd.hpp"
 #include "plugin/skip_marking.hpp"
 
 namespace plugin {
@@ -53,21 +55,38 @@ struct RegisteredHotkeys {
     bool ok[std::size(kHotkeyDefinitions)]{};
 };
 
-RegisteredHotkeys RegisterHotkeys() {
+// PTS-016: which of config's three remappable specs backs a given static
+// definition's action — the id/action/name pairing in kHotkeyDefinitions
+// never changes, only the actual modifiers/virtualKey RegisterHotKey is
+// called with.
+core::HotkeySpec ConfiguredSpec(HotkeyAction action, const core::Config& config) {
+    switch (action) {
+    case HotkeyAction::kAltA:
+        return config.newMarkHotkey;
+    case HotkeyAction::kAltOpenBracket:
+        return config.markStartHotkey;
+    case HotkeyAction::kAltCloseBracket:
+        return config.markEndHotkey;
+    }
+    return {};
+}
+
+RegisteredHotkeys RegisterHotkeys(const core::Config& config) {
     RegisteredHotkeys registered;
     for (std::size_t i = 0; i < std::size(kHotkeyDefinitions); ++i) {
         const auto& definition = kHotkeyDefinitions[i];
+        const core::HotkeySpec spec = ConfiguredSpec(definition.action, config);
         // MOD_NOREPEAT so holding a key down doesn't flood WM_HOTKEY —
         // PTS-013 asks for presses to route, not autorepeat spam.
-        if (RegisterHotKey(nullptr, definition.id, definition.modifiers | MOD_NOREPEAT,
-                            definition.virtualKey)) {
+        if (RegisterHotKey(nullptr, definition.id, spec.modifiers | MOD_NOREPEAT, spec.virtualKey)) {
             registered.ok[i] = true;
             continue;
         }
         // Not fatal: a hotkey already taken by another app is logged and
         // skipped, per PTS-013's "the plugin stays alive" requirement —
         // the other two keys still work.
-        LOG_WARN("hotkeys: RegisterHotKey failed for {}, gle={}", definition.name, GetLastError());
+        LOG_WARN("hotkeys: RegisterHotKey failed for {} ({}), gle={}", definition.name,
+                  core::FormatHotkeySpec(spec), GetLastError());
     }
     return registered;
 }
@@ -88,12 +107,16 @@ void UnregisterHotkeys(const RegisteredHotkeys& registered) {
 // rapid presses is fully processed before the loop goes back to waiting —
 // what actually satisfies PTS-013's "rapid successive presses are not
 // silently dropped" for today's fast/non-blocking handlers above.
-void DrainMessageQueue(SkipMarkingStateMachine& machine) {
+//
+// `globalHotkeys` is PTS-016's config toggle: true skips the foreground
+// check entirely (the keys act everywhere), false keeps PTS-013's original
+// "only while you're watching" default.
+void DrainMessageQueue(SkipMarkingStateMachine& machine, bool globalHotkeys) {
     MSG msg;
     while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_HOTKEY) {
             const auto action = ResolveHotkeyAction(static_cast<int>(msg.wParam));
-            if (action && IsPotPlayerForeground()) {
+            if (action && (globalHotkeys || IsPotPlayerForeground())) {
                 Invoke(machine, *action);
             }
             continue;
@@ -106,8 +129,16 @@ void DrainMessageQueue(SkipMarkingStateMachine& machine) {
 }  // namespace
 
 void RunHotkeyPump(HANDLE stopEvent) {
-    const RegisteredHotkeys registered = RegisterHotkeys();
-    SkipMarkingStateMachine machine(MakeLiveSkipMarkingDriver());
+    // PTS-016: loaded once at startup, before anything else below so log
+    // verbosity and OSD behavior are already in effect for every line this
+    // function itself logs.
+    const core::Config config = LoadConfig();
+    diagnostics::SetMinSeverity(config.logVerbosity);
+    SetOsdEnabled(config.osdEnabled);
+    SetOsdDurationMs(static_cast<unsigned int>(config.osdDurationMs));
+
+    const RegisteredHotkeys registered = RegisterHotkeys(config);
+    SkipMarkingStateMachine machine(MakeLiveSkipMarkingDriver(config.autoEnableSkip));
     LOG_INFO("hotkeys: pump started");
 
     for (;;) {
@@ -123,7 +154,7 @@ void RunHotkeyPump(HANDLE stopEvent) {
             LOG_ERROR("hotkeys: MsgWaitForMultipleObjects failed, gle={}", GetLastError());
             break;
         }
-        DrainMessageQueue(machine);
+        DrainMessageQueue(machine, config.globalHotkeys);
     }
 
     LOG_INFO("hotkeys: pump stopping");

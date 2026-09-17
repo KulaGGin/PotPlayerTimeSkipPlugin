@@ -49,4 +49,13 @@ std::string ComposeOsdText(const OsdMessage& message);
 // loop to deliver HCBT/WM_COMMAND traffic.
 void ShowOsdLive(const std::string& text);
 
+// PTS-016: config-driven overrides applied to every future ShowOsdLive call.
+// SetOsdEnabled(false) makes ShowOsdLive a silent no-op — the feature is
+// "off", not a failure, so nothing is logged. Both are only ever touched
+// from PTS-013's single hotkey pump thread before it starts registering
+// hotkeys, the same "no lock needed" contract g_activeToast already relies
+// on, so a plain atomic store/load is enough.
+void SetOsdEnabled(bool enabled);
+void SetOsdDurationMs(unsigned int durationMs);
+
 }

@@ -40,7 +40,12 @@ struct SkipMarkingDriver {
 // CloseSkipSetupOk/Cancel (PTS-010/011/012) chained together for
 // commitRange. Constructing this is the only place PTS-014 touches the
 // live player.
-SkipMarkingDriver MakeLiveSkipMarkingDriver();
+//
+// `autoEnableSkip` gates the EnsureSkipEnabled step (PTS-016's config): if
+// false, a range still gets added even while Skip Setup's own "Enable skip
+// feature" checkbox is off, rather than this driver flipping it on for the
+// user.
+SkipMarkingDriver MakeLiveSkipMarkingDriver(bool autoEnableSkip);
 
 // Commit strategy: "commit-on-complete" (the issue's recommended option
 // (a)) — the active entry lives only in memory until both its start and

@@ -7,6 +7,7 @@ add_library(plugin STATIC
     src/skip_marking.cpp
     src/hotkeys.cpp
     src/hotkey_pump.cpp
+    src/config.cpp
 )
 
 target_include_directories(plugin PUBLIC include)

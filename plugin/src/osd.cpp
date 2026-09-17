@@ -35,7 +35,7 @@ namespace {
 
 constexpr wchar_t kOsdClassName[] = L"PotPlayerTimeSkipOsd";
 constexpr UINT_PTR kDismissTimerId = 1;
-constexpr UINT kDismissMs = 1800;
+constexpr UINT kDefaultDismissMs = 1800;
 constexpr int kPaddingX = 18;
 constexpr int kPaddingY = 12;
 // Clear of PotPlayer's own seek bar / control strip along the bottom edge,
@@ -48,6 +48,10 @@ constexpr BYTE kAlpha = 215;
 // needs no lock, just the same "atomic, re-validated with IsWindow()"
 // caching convention plugin/player_window.cpp's g_mainWindow already uses.
 std::atomic<HWND> g_activeToast{nullptr};
+
+// PTS-016 config overrides — see SetOsdEnabled/SetOsdDurationMs below.
+std::atomic<bool> g_osdEnabled{true};
+std::atomic<UINT> g_osdDurationMs{kDefaultDismissMs};
 
 // The text to paint is stashed on the window itself (GWLP_USERDATA) rather
 // than captured by the wndproc, since a plain WNDPROC can't capture — freed
@@ -157,6 +161,10 @@ SIZE MeasureText(const std::wstring& text) {
 }  // namespace
 
 void ShowOsdLive(const std::string& text) {
+    if (!g_osdEnabled.load(std::memory_order_relaxed)) {
+        return;
+    }
+
     const HWND mainWindow = reinterpret_cast<HWND>(GetMainWindowHandle());
     if (mainWindow == nullptr) {
         LOG_WARN("osd: cannot show '{}', PotPlayer main window not found", text);
@@ -165,7 +173,7 @@ void ShowOsdLive(const std::string& text) {
 
     // A new message replaces whatever toast is already on screen rather
     // than stacking behind/beside it — the hotkeys fire in quick bursts
-    // (Alt+A, Alt+[, Alt+]) well inside kDismissMs of each other.
+    // (Alt+A, Alt+[, Alt+]) well inside the dismiss duration of each other.
     const HWND previous = g_activeToast.exchange(nullptr, std::memory_order_relaxed);
     if (previous != nullptr && IsWindow(previous)) {
         KillTimer(previous, kDismissTimerId);
@@ -201,9 +209,17 @@ void ShowOsdLive(const std::string& text) {
     SetWindowLongPtrW(toast, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(new std::wstring(std::move(wide))));
     SetLayeredWindowAttributes(toast, 0, kAlpha, LWA_ALPHA);
     ShowWindow(toast, SW_SHOWNOACTIVATE);
-    SetTimer(toast, kDismissTimerId, kDismissMs, nullptr);
+    SetTimer(toast, kDismissTimerId, g_osdDurationMs.load(std::memory_order_relaxed), nullptr);
 
     g_activeToast.store(toast, std::memory_order_relaxed);
+}
+
+void SetOsdEnabled(bool enabled) {
+    g_osdEnabled.store(enabled, std::memory_order_relaxed);
+}
+
+void SetOsdDurationMs(unsigned int durationMs) {
+    g_osdDurationMs.store(static_cast<UINT>(durationMs), std::memory_order_relaxed);
 }
 
 }  // namespace plugin
