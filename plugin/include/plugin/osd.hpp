@@ -17,13 +17,13 @@
 namespace plugin {
 
 enum class OsdEvent {
-    kNoFileOpen,     // a hotkey was pressed with no file open
-    kNewMark,        // Alt+A started a fresh entry
-    kMarkIgnored,    // Alt+[ or Alt+] would have made a backwards/empty range
-    kMarkStart,      // Alt+[ set the active entry's start (no commit yet)
-    kMarkEnd,        // Alt+] set the active entry's end (no commit yet)
-    kSaved,          // both bounds were set and commitRange succeeded
-    kSaveFailed,     // both bounds were set but commitRange failed
+    kNoFileOpen,      // a hotkey was pressed with no file open
+    kMarkIgnored,     // Alt+A's pending end would not be after its start
+    kMarkIncomplete,  // Alt+A pressed before both start and end were set
+    kMarkStart,       // Alt+[ set the pending mark's start (no commit yet)
+    kMarkEnd,         // Alt+] set the pending mark's end (no commit yet)
+    kSaved,           // Alt+A committed the pending mark and it succeeded
+    kSaveFailed,      // Alt+A committed the pending mark but it failed
 };
 
 // Not every event needs both times: kMarkStart reads only startMs, kMarkEnd

@@ -14,10 +14,10 @@ std::string ComposeOsdText(const OsdMessage& message) {
     switch (message.event) {
     case OsdEvent::kNoFileOpen:
         return "No file open";
-    case OsdEvent::kNewMark:
-        return "Skip: new mark";
     case OsdEvent::kMarkIgnored:
         return "Skip mark ignored (invalid range)";
+    case OsdEvent::kMarkIncomplete:
+        return "Set start and end first";
     case OsdEvent::kMarkStart:
         return "Skip start " + core::FormatTimecodeShort(*message.startMs);
     case OsdEvent::kMarkEnd:

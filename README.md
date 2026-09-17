@@ -109,8 +109,9 @@ Verbosity=Info
 
 An unrecognized section or key is ignored (logged, not an error) — useful if
 a future version adds keys an older config.ini doesn't have yet. The
-skip-marking commit strategy isn't configurable: PTS-014 only implemented
-"commit-on-complete", so there is nothing to choose between yet.
+skip-marking workflow isn't configurable: `Alt+[`/`Alt+]` always edit a
+pending start/end (in either order, any number of times) and `Alt+A` always
+commits them, so there is nothing to choose between yet.
 
 ## Notes
 

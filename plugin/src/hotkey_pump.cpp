@@ -13,12 +13,10 @@ namespace plugin {
 namespace {
 
 // Routes a resolved press straight into the PTS-014 state machine. Kept
-// fast/non-blocking here: the dialog-driving work only happens once a
-// range actually completes (TryCommit), and even then it runs inline on
-// this same pump thread — a rapid Alt+[ then Alt+] between two different
-// entries can't interleave since WM_HOTKEY messages are handled one at a
-// time in press order, and a single entry's own two presses are exactly
-// what triggers that one dialog round trip.
+// fast/non-blocking here: the dialog-driving work only happens on Alt+A
+// (OnAltA), and even then it runs inline on this same pump thread — two
+// rapid Alt+A commits can't interleave since WM_HOTKEY messages are handled
+// one at a time in press order.
 void Invoke(SkipMarkingStateMachine& machine, HotkeyAction action) {
     switch (action) {
     case HotkeyAction::kAltA:

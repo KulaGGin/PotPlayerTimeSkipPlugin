@@ -61,8 +61,8 @@ std::string FormatHotkeySpec(const HotkeySpec& spec);
 // I/O failures), so this struct itself never needs an "is this valid"
 // check.
 //
-// Commit strategy (skip_marking.hpp's "commit-on-complete") isn't
-// configurable here: PTS-014 only ever implemented that one strategy, so
+// The skip-marking pick-then-commit workflow (skip_marking.hpp) isn't
+// configurable here: PTS-014 only ever implemented that one workflow, so
 // there is nothing to choose between yet.
 struct Config {
     HotkeySpec newMarkHotkey{kModAlt, 'A'};              // Alt+A (PTS-013)

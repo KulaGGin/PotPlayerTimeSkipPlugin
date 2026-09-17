@@ -22,8 +22,8 @@ TEST_CASE("ComposeOsdText renders each event as the issue's example text", "[plu
 
     const auto testCase = GENERATE(
         Case{OsdMessage{OsdEvent::kNoFileOpen}, "No file open"},
-        Case{OsdMessage{OsdEvent::kNewMark}, "Skip: new mark"},
         Case{OsdMessage{OsdEvent::kMarkIgnored}, "Skip mark ignored (invalid range)"},
+        Case{OsdMessage{OsdEvent::kMarkIncomplete}, "Set start and end first"},
         Case{OsdMessage{OsdEvent::kMarkStart, Milliseconds{754567}, std::nullopt}, "Skip start 00:12:34"},
         Case{OsdMessage{OsdEvent::kMarkEnd, std::nullopt, Milliseconds{1425678}}, "Skip end 00:23:45"},
         Case{OsdMessage{OsdEvent::kSaved, Milliseconds{754567}, Milliseconds{1425678}},
