@@ -2,9 +2,12 @@
 
 #include <windows.h>
 
+#include <commctrl.h>
+
 #include <atomic>
 #include <cwchar>
 #include <iterator>
+#include <string>
 
 #include "diagnostics/log.hpp"
 #include "plugin/player_window.hpp"
@@ -15,7 +18,9 @@ namespace plugin {
 
 namespace {
 
+constexpr wchar_t kDialogClass[] = L"#32770";
 constexpr wchar_t kSkipSetupTitle[] = L"Skip Setup";
+constexpr wchar_t kSkipIntervalTitle[] = L"Skip Interval Setup";
 constexpr wchar_t kShadowClass[] = L"PotShadowWnd";
 
 // Polling budgets: the open side just waits on the hook below to fill in
@@ -124,7 +129,6 @@ struct CapturedWindows {
 // with nothing watching it — the actual failure measured live before this
 // fallback existed.
 HWND FindAndParkFallback() {
-    constexpr wchar_t kDialogClass[] = L"#32770";
     const ULONGLONG deadline = GetTickCount64() + kOpenTimeoutMs;
     do {
         const auto enumerated = EnumerateOwnProcessWindows();
@@ -238,6 +242,63 @@ bool ClickAndWaitClosed(const SkipSetupDialog& dialog, int buttonId, std::uintpt
     return true;
 }
 
+// Skip Interval Setup's own timecode edits and combo are plain digits,
+// colons, and a dot — plain ASCII round-trips through wstring/string
+// narrowing with no encoding loss, so this skips MultiByteToWideChar
+// entirely rather than pulling it in for text that never has anything
+// outside that range.
+std::wstring WidenAscii(const std::string& text) {
+    return std::wstring(text.begin(), text.end());
+}
+
+std::string NarrowAscii(const std::wstring& text) {
+    std::string result;
+    result.reserve(text.size());
+    for (const wchar_t ch : text) {
+        result.push_back(static_cast<char>(ch));
+    }
+    return result;
+}
+
+std::wstring GetWindowTextValue(HWND hwnd) {
+    wchar_t buffer[64];
+    const int length = GetWindowTextW(hwnd, buffer, static_cast<int>(std::size(buffer)));
+    return length > 0 ? std::wstring(buffer, static_cast<std::size_t>(length)) : std::wstring{};
+}
+
+// Polls for Skip Interval Setup the same way FindAndParkFallback polls for
+// Skip Setup — no CBT hook here, unlike OpenViaHook above: Skip Interval
+// Setup is a modal child of Skip Setup, which is already parked off-screen
+// at this point, so the child's owner-centered default position inherits
+// that off-screen placement rather than flashing over the visible main
+// window the way Skip Setup's own top-level open did. ParkOffScreen below
+// is a safety net for the case that assumption doesn't hold, not the
+// primary flash-prevention mechanism.
+HWND WaitForSkipIntervalSetup() {
+    const ULONGLONG deadline = GetTickCount64() + kOpenTimeoutMs;
+    do {
+        const auto enumerated = EnumerateOwnProcessWindows();
+        const auto selected = SelectWindowByTitle(enumerated.candidates, kDialogClass, kSkipIntervalTitle);
+        if (selected) {
+            return enumerated.handlesByValue.at(*selected);
+        }
+        Sleep(kPollIntervalMs);
+    } while (GetTickCount64() < deadline);
+    return nullptr;
+}
+
+bool PostIntervalButtonAndWaitClosed(HWND interval, int buttonId, HWND buttonHandle) {
+    if (!PostMessageW(interval, WM_COMMAND, MAKEWPARAM(buttonId, BN_CLICKED), reinterpret_cast<LPARAM>(buttonHandle))) {
+        LOG_ERROR("plugin: PostMessage(Skip Interval Setup button {}) failed, gle={}", buttonId, GetLastError());
+        return false;
+    }
+    if (!WaitForWindowGone(interval)) {
+        LOG_ERROR("plugin: Skip Interval Setup did not close within {} ms", kCloseTimeoutMs);
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 std::variant<SkipSetupControls, MissingSkipSetupControl> ResolveSkipSetupControls(
@@ -298,6 +359,135 @@ bool CloseSkipSetupOk(const SkipSetupDialog& dialog) {
 
 bool CloseSkipSetupCancel(const SkipSetupDialog& dialog) {
     return ClickAndWaitClosed(dialog, kCancelButtonId, dialog.controls.cancelButton);
+}
+
+std::variant<SkipIntervalControls, MissingSkipIntervalControl> ResolveSkipIntervalControls(
+    const std::function<std::uintptr_t(int)>& lookup) {
+    struct Slot {
+        int id;
+        std::uintptr_t SkipIntervalControls::*member;
+    };
+    const Slot slots[] = {
+        {kIntervalStartEditId, &SkipIntervalControls::startEdit},
+        {kIntervalEndEditId, &SkipIntervalControls::endEdit},
+        {kIntervalLengthEditId, &SkipIntervalControls::lengthEdit},
+        {kIntervalTypeComboId, &SkipIntervalControls::typeCombo},
+        {kIntervalOkButtonId, &SkipIntervalControls::okButton},
+        {kIntervalCancelButtonId, &SkipIntervalControls::cancelButton},
+    };
+
+    SkipIntervalControls controls{};
+    for (const auto& slot : slots) {
+        const std::uintptr_t handle = lookup(slot.id);
+        if (handle == 0) {
+            return MissingSkipIntervalControl{slot.id};
+        }
+        controls.*(slot.member) = handle;
+    }
+    return controls;
+}
+
+std::optional<SkipIntervalMismatch> VerifySkipIntervalReadback(const core::SkipRange& range,
+                                                                const SkipIntervalReadback& readback) {
+    core::Milliseconds startMs = 0;
+    try {
+        startMs = core::ParseTimecode(readback.startText);
+    } catch (const core::ParseError&) {
+        return SkipIntervalMismatch{"start", core::FormatTimecode(range.StartMs()), readback.startText};
+    }
+    if (startMs != range.StartMs()) {
+        return SkipIntervalMismatch{"start", core::FormatTimecode(range.StartMs()), readback.startText};
+    }
+
+    core::Milliseconds endMs = 0;
+    try {
+        endMs = core::ParseTimecode(readback.endText);
+    } catch (const core::ParseError&) {
+        return SkipIntervalMismatch{"end", core::FormatTimecode(range.EndMs()), readback.endText};
+    }
+    if (endMs != range.EndMs()) {
+        return SkipIntervalMismatch{"end", core::FormatTimecode(range.EndMs()), readback.endText};
+    }
+
+    if (readback.typeIndex != kFileSpecificComboIndex) {
+        return SkipIntervalMismatch{"type", std::to_string(kFileSpecificComboIndex),
+                                     std::to_string(readback.typeIndex)};
+    }
+
+    return std::nullopt;
+}
+
+bool AddFileSpecificSkipRange(const SkipSetupDialog& dialog, const core::SkipRange& range) {
+    const HWND setupHwnd = reinterpret_cast<HWND>(dialog.hwnd);
+    const HWND rangeList = reinterpret_cast<HWND>(dialog.controls.rangeList);
+    const HWND addButton = reinterpret_cast<HWND>(dialog.controls.addButton);
+
+    const LRESULT countBefore = SendMessageW(rangeList, LVM_GETITEMCOUNT, 0, 0);
+
+    // PostMessage, never SendMessage: Add...'s handler runs its own modal
+    // DialogBox loop (docs/FINDINGS.md section 6), same hazard as opening
+    // Skip Setup itself.
+    if (!PostMessageW(setupHwnd, WM_COMMAND, MAKEWPARAM(kAddButtonId, BN_CLICKED),
+                       reinterpret_cast<LPARAM>(addButton))) {
+        LOG_ERROR("plugin: PostMessage(Skip Setup Add...) failed, gle={}", GetLastError());
+        return false;
+    }
+
+    const HWND interval = WaitForSkipIntervalSetup();
+    if (interval == nullptr) {
+        LOG_ERROR("plugin: Skip Interval Setup did not appear within {} ms", kOpenTimeoutMs);
+        return false;
+    }
+    ParkOffScreen(interval);
+
+    auto resolution = ResolveSkipIntervalControls(
+        [interval](int id) { return reinterpret_cast<std::uintptr_t>(GetDlgItem(interval, id)); });
+    if (const auto* missing = std::get_if<MissingSkipIntervalControl>(&resolution)) {
+        LOG_ERROR("plugin: Skip Interval Setup opened but control id {} is missing — layout mismatch?", missing->id);
+        PostIntervalButtonAndWaitClosed(interval, kIntervalCancelButtonId, GetDlgItem(interval, kIntervalCancelButtonId));
+        return false;
+    }
+    const auto& controls = std::get<SkipIntervalControls>(resolution);
+    const HWND startEdit = reinterpret_cast<HWND>(controls.startEdit);
+    const HWND endEdit = reinterpret_cast<HWND>(controls.endEdit);
+    const HWND typeCombo = reinterpret_cast<HWND>(controls.typeCombo);
+    const HWND okButton = reinterpret_cast<HWND>(controls.okButton);
+    const HWND cancelButton = reinterpret_cast<HWND>(controls.cancelButton);
+
+    // WM_SETTEXT/CB_SETCURSEL are plain control messages, not WM_COMMAND —
+    // they never invoke a modal loop, so SendMessage is the right (and
+    // simpler, synchronous) call here, unlike the button clicks above.
+    const std::wstring startWide = WidenAscii(core::FormatTimecode(range.StartMs()));
+    const std::wstring endWide = WidenAscii(core::FormatTimecode(range.EndMs()));
+    SendMessageW(startEdit, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(startWide.c_str()));
+    SendMessageW(endEdit, WM_SETTEXT, 0, reinterpret_cast<LPARAM>(endWide.c_str()));
+    SendMessageW(typeCombo, CB_SETCURSEL, static_cast<WPARAM>(kFileSpecificComboIndex), 0);
+
+    const SkipIntervalReadback readback{
+        NarrowAscii(GetWindowTextValue(startEdit)),
+        NarrowAscii(GetWindowTextValue(endEdit)),
+        static_cast<int>(SendMessageW(typeCombo, CB_GETCURSEL, 0, 0)),
+    };
+
+    const auto mismatch = VerifySkipIntervalReadback(range, readback);
+    if (mismatch) {
+        LOG_ERROR("plugin: Skip Interval Setup read-back mismatch on {} (expected '{}', got '{}') — cancelling, not committing",
+                   mismatch->field, mismatch->expected, mismatch->actual);
+        PostIntervalButtonAndWaitClosed(interval, kIntervalCancelButtonId, cancelButton);
+        return false;
+    }
+
+    if (!PostIntervalButtonAndWaitClosed(interval, kIntervalOkButtonId, okButton)) {
+        return false;
+    }
+
+    const LRESULT countAfter = SendMessageW(rangeList, LVM_GETITEMCOUNT, 0, 0);
+    if (countAfter != countBefore + 1) {
+        LOG_ERROR("plugin: Skip Setup range list count went from {} to {} after Add (expected +1)", countBefore,
+                   countAfter);
+        return false;
+    }
+    return true;
 }
 
 }  // namespace plugin

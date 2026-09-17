@@ -3,7 +3,10 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <variant>
+
+#include "core/core.hpp"
 
 // Opens and drives PotPlayer's Skip Setup dialog in-process, without
 // stealing foreground focus or ever drawing it on screen (PTS-010). Kept
@@ -86,5 +89,96 @@ std::optional<SkipSetupDialog> OpenSkipSetup();
 // there when the wait times out.
 bool CloseSkipSetupOk(const SkipSetupDialog& dialog);
 bool CloseSkipSetupCancel(const SkipSetupDialog& dialog);
+
+// Skip Interval Setup's own child control ids (docs/FINDINGS.md section 3),
+// opened via Skip Setup's Add... button above. Its OK/Cancel share the
+// numeric ids (1/2) of Skip Setup's own OK/Cancel — a different dialog, so
+// no collision — kept as separate names since they're resolved against a
+// different HWND.
+inline constexpr int kIntervalStartEditId = 3088;
+inline constexpr int kIntervalEndEditId = 3092;
+inline constexpr int kIntervalLengthEditId = 3091;
+inline constexpr int kIntervalTypeComboId = 3012;
+inline constexpr int kIntervalOkButtonId = 1;
+inline constexpr int kIntervalCancelButtonId = 2;
+
+// Skip Interval Setup's Type combo selection index for File-specific
+// (`[0]` Overall, `[1]` File-specific, docs/FINDINGS.md section 3) —
+// numerically the same as core::kFileSpecificType, but named separately
+// since this is the dialog's own combo index, not the .pbf type field it
+// ends up producing.
+inline constexpr int kFileSpecificComboIndex = 1;
+
+// Skip Interval Setup's resolved child controls, narrowed HWNDs.
+struct SkipIntervalControls {
+    std::uintptr_t startEdit;
+    std::uintptr_t endEdit;
+    std::uintptr_t lengthEdit;
+    std::uintptr_t typeCombo;
+    std::uintptr_t okButton;
+    std::uintptr_t cancelButton;
+};
+
+// What ResolveSkipIntervalControls reports when a required control isn't
+// found, mirroring MissingSkipSetupControl above.
+struct MissingSkipIntervalControl {
+    int id;
+};
+
+// Same lookup-function contract as ResolveSkipSetupControls above: a real
+// caller passes GetDlgItem, a test passes a fake over synthetic data.
+std::variant<SkipIntervalControls, MissingSkipIntervalControl> ResolveSkipIntervalControls(
+    const std::function<std::uintptr_t(int)>& lookup);
+
+// One field of what was WM_SETTEXT/CB_SETCURSEL'd into Skip Interval Setup
+// that didn't read back (via WM_GETTEXT/CB_GETCURSEL) as requested.
+struct SkipIntervalMismatch {
+    std::string field;
+    std::string expected;
+    std::string actual;
+};
+
+// What Skip Interval Setup's start/end edits and type combo actually
+// reported back after being filled in, ready to compare against what was
+// requested.
+struct SkipIntervalReadback {
+    std::string startText;
+    std::string endText;
+    int typeIndex;
+};
+
+// The mandatory read-back-before-commit check (PTS-011 — "measure it,
+// don't argue it": a syntactically valid entry at the wrong time looks
+// exactly like success). Parses readback.startText/endText with
+// core::ParseTimecode and compares the resulting millisecond values — not
+// the raw text, so a cosmetic reformatting by the dialog would still count
+// as a match — against range's start/end, and compares readback.typeIndex
+// against kFileSpecificComboIndex. Checked in that order (start, end,
+// type) and returns the first mismatch found, or nullopt if everything
+// matches and it is safe to commit. Text that doesn't even parse as a
+// timecode is itself reported as a mismatch rather than left to throw —
+// PotPlayer rejecting or mangling the input is exactly the failure this
+// check exists to catch, not a bug in the caller.
+std::optional<SkipIntervalMismatch> VerifySkipIntervalReadback(const core::SkipRange& range,
+                                                                const SkipIntervalReadback& readback);
+
+// Drives Skip Setup's Add... through a complete Skip Interval Setup round
+// trip to add one File-specific range to the currently open file (PTS-011).
+// `dialog` must already be open (OpenSkipSetup()).
+//
+// Clicks Add... (PostMessage, never SendMessage — its handler runs its own
+// modal DialogBox loop, docs/FINDINGS.md section 6), waits for Skip
+// Interval Setup to appear, parks it off-screen, resolves its controls,
+// fills in the requested start/end/type, reads them back, and OKs the
+// dialog only if the read-back verified — Cancels instead on any
+// mismatch, never committing an unverified value.
+//
+// Returns true once the range list's item count has gone up by exactly
+// one; false (logged) on any failure along the way: Add never opening the
+// dialog, a missing control, a read-back mismatch, or a final count that
+// didn't move by exactly one. Purely additive — never touches an existing
+// range — and leaves `dialog` (Skip Setup itself) open either way, so a
+// caller can batch several adds before its own final OK/Cancel.
+bool AddFileSpecificSkipRange(const SkipSetupDialog& dialog, const core::SkipRange& range);
 
 }
