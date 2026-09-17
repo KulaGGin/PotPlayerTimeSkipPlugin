@@ -20,6 +20,14 @@ It is never wired into CTest and never runs as part of `ctest --test-dir
 build`: PTS-018's own acceptance criteria call for it to stay "separate from
 the fast unit run," reachable only by explicitly running this script.
 
+If the test video has never had a `.pbf` before, this script attempts a
+one-time automated bootstrap add and fails fast with actionable guidance if
+that doesn't persist - discovered live: on at least one PotPlayer build,
+adding the very FIRST range to a file that's never had a `.pbf` does not
+persist when driven by this suite's own out-of-process dialog automation,
+even though the identical operation via real hotkeys works fine. See this
+folder's README's "Known PotPlayer quirk" section.
+
 .PARAMETER TestVideoPath
 Full path to the test video currently open in PotPlayer. Required - this
 script refuses to guess which file is open from inside PotPlayer's own
@@ -56,15 +64,37 @@ Import-Module (Join-Path $PSScriptRoot 'HotkeyGesture.psm1') -Force
 $script:passCount = 0
 $script:failCount = 0
 
-function Test-Case([string]$Name, [scriptblock]$Body) {
-    try {
-        & $Body
-        Write-Host "[PASS] $Name" -ForegroundColor Green
-        $script:passCount++
-    } catch {
-        Write-Host "[FAIL] $Name" -ForegroundColor Red
-        Write-Host "       $($_.Exception.Message)" -ForegroundColor Red
-        $script:failCount++
+function Test-Case([string]$Name, [scriptblock]$Body, [int]$Retries = 0) {
+    # `Retries` absorbs a real, still-not-fully-root-caused flakiness in
+    # this PotPlayer build: Skip Setup's OK occasionally does not persist
+    # an Add at all - not a slow write, a write that genuinely never
+    # happens, confirmed by waiting 20+ seconds and even closing PotPlayer
+    # entirely - even after generous settle delays elsewhere in this
+    # suite. Reverting live checks confirmed a failed persist leaves
+    # BOTH disk and PotPlayer's own future in-memory reads back at the
+    # pre-Add state, never a duplicate or partial one, so redoing the
+    # whole scenario body (open, add, close, assert) on failure is safe -
+    # nothing accumulates across a retry.
+    for ($attempt = 1; $attempt -le ($Retries + 1); $attempt++) {
+        try {
+            & $Body
+            if ($attempt -gt 1) {
+                Write-Host "[PASS] $Name (attempt $attempt/$($Retries + 1))" -ForegroundColor Green
+            } else {
+                Write-Host "[PASS] $Name" -ForegroundColor Green
+            }
+            $script:passCount++
+            return
+        } catch {
+            if ($attempt -le $Retries) {
+                Write-Host "[RETRY] $Name (attempt $attempt/$($Retries + 1) failed: $($_.Exception.Message))" -ForegroundColor Yellow
+                continue
+            }
+            Write-Host "[FAIL] $Name" -ForegroundColor Red
+            Write-Host "       $($_.Exception.Message)" -ForegroundColor Red
+            $script:failCount++
+            return
+        }
     }
 }
 
@@ -99,33 +129,41 @@ function Invoke-WithSkipSetupDialog([scriptblock]$Body) {
 # only waits for the WINDOW to disappear (Wait-WindowGone), not for
 # PotPlayer's own file write to land, so reading the instant the window
 # handle goes invalid is a real (if narrow) race, not a hypothetical one.
-function Assert-PbfRangesMatch([array]$Expected, [string]$PbfPath, [string]$Message, [int]$TimeoutMs = 1000) {
-    # Named $rangesEqual, not $matches: $matches is PowerShell's automatic
-    # variable populated by the -match operator - shadowing it here would be
-    # a landmine for the next edit that adds a -match check to this function.
+#
+# Baseline-aware, not exact-list: checks that `ExpectedCount` entries exist
+# in total and that each of `ExpectedPresent` appears SOMEWHERE in the list
+# with an exact start/end match, rather than requiring the list to be
+# exactly `ExpectedPresent` - see this script's own header comment on the
+# discovered "adding to an empty list never persists via automation" quirk.
+# Every scenario below runs against a test video that already has a
+# baseline range (real precondition, see the bootstrap step), so asserting
+# an exact list would make every scenario after the first fail on the
+# baseline entry it never asked about.
+function Assert-PbfContainsRanges([array]$ExpectedPresent, [int]$ExpectedCount, [string]$PbfPath, [string]$Message, [int]$TimeoutMs = 1000) {
     $actualList = @()
-    $rangesEqual = $false
+    $ok = $false
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
     do {
         $actual = Get-PbfRanges -Path $PbfPath
         $actualList = if ($null -eq $actual) { @() } else { @($actual) }
 
-        $rangesEqual = ($actualList.Count -eq $Expected.Count)
-        if ($rangesEqual) {
-            for ($i = 0; $i -lt $Expected.Count; $i++) {
-                if ($actualList[$i].StartMs -ne $Expected[$i].StartMs -or $actualList[$i].EndMs -ne $Expected[$i].EndMs) {
-                    $rangesEqual = $false
-                    break
+        $ok = ($actualList.Count -eq $ExpectedCount)
+        if ($ok) {
+            foreach ($want in $ExpectedPresent) {
+                $found = $false
+                foreach ($have in $actualList) {
+                    if ($have.StartMs -eq $want.StartMs -and $have.EndMs -eq $want.EndMs) { $found = $true; break }
                 }
+                if (-not $found) { $ok = $false; break }
             }
         }
-        if (-not $rangesEqual) { Start-Sleep -Milliseconds 25 }
-    } while (-not $rangesEqual -and [DateTime]::UtcNow -lt $deadline)
+        if (-not $ok) { Start-Sleep -Milliseconds 25 }
+    } while (-not $ok -and [DateTime]::UtcNow -lt $deadline)
 
-    if (-not $rangesEqual) {
+    if (-not $ok) {
         Write-Host "       --- .pbf mismatch diagnostic ---" -ForegroundColor Yellow
-        Write-Host "       Requested:" -ForegroundColor Yellow
-        foreach ($r in $Expected) { Write-Host "         [$($r.StartMs), $($r.EndMs))" -ForegroundColor Yellow }
+        Write-Host "       Expected count: $ExpectedCount, must contain:" -ForegroundColor Yellow
+        foreach ($r in $ExpectedPresent) { Write-Host "         [$($r.StartMs), $($r.EndMs))" -ForegroundColor Yellow }
         Write-Host "       Actual ($PbfPath):" -ForegroundColor Yellow
         foreach ($r in $actualList) { Write-Host "         index=$($r.Index) type=$($r.Type) [$($r.StartMs), $($r.EndMs))" -ForegroundColor Yellow }
         throw "Assertion failed: $Message"
@@ -147,6 +185,19 @@ if (-not (Test-PotPlayerFileOpen -MainWindow $mainWindow)) {
     throw "PotPlayer reports no file open (duration query returned 0). Open '$TestVideoPath' in PotPlayer first."
 }
 
+# This suite's own hardcoded ranges (below) top out at 17000ms - confirmed
+# live that a range whose end exceeds the clip's real duration makes
+# PotPlayer seek past end-of-file when it lands (Skip Interval Setup
+# apparently previews the position), which looks exactly like the clip
+# finishing playback and can close the file entirely. 20s leaves a safety
+# margin rather than cutting it exactly at 17s.
+$clipDurationMs = Get-PlaybackDurationMs -MainWindow $mainWindow
+if ($clipDurationMs -lt 20000) {
+    throw "Test video is only ${clipDurationMs}ms long - this suite's built-in ranges need at least 20000ms " +
+        "(a range whose end exceeds the clip's duration can make PotPlayer seek past end-of-file and close it). " +
+        "Use a longer throwaway test clip."
+}
+
 $pbfPath = Get-PbfPath -VideoPath $TestVideoPath
 Write-Host "Test video: $TestVideoPath"
 Write-Host ".pbf sidecar: $pbfPath"
@@ -166,59 +217,85 @@ if (Test-Path -LiteralPath $pbfPath -PathType Leaf) {
     Write-Host "No existing .pbf - will restore to 'absent' afterward."
 }
 
+# ---------------------------------------------------------------------------
+# Bootstrap  -  discovered live (not documented anywhere before this suite
+# existed): on this PotPlayer build, adding the FIRST range to a video that
+# has never had a `.pbf` does not persist when driven by this suite's own
+# out-of-process dialog automation (SkipSetupAutomation.psm1) - confirmed
+# repeatedly, including waiting 20+ seconds and even closing PotPlayer
+# entirely afterward. The SAME operation via the real hotkeys (a genuine
+# physical Alt+[/Alt+]/Alt+A, in-process, PTS-014's own commit path) works
+# fine and persists immediately - this is specific to the empty-list-to-one
+# transition being driven cross-process, not a plugin bug. Every OTHER
+# transition (topping up an already non-empty list, clearing one down to
+# empty) persists reliably via automation, which is why every scenario
+# below is written to add ON TOP of a baseline rather than assuming it
+# starts from a clean empty list.
+if ($null -eq $originalBytes) {
+    Write-Host "No baseline range on this file yet - attempting a one-time automated bootstrap add..."
+    Invoke-WithSkipSetupDialog {
+        param($dialog)
+        [void](Set-SkipSetupEnabled -Dialog $dialog)
+        [void](Add-SkipSetupRange -Dialog $dialog -StartMs 500 -EndMs 1500)
+        Close-SkipSetupDialog -Dialog $dialog -Ok
+    }
+    $bootstrapped = $false
+    $deadline = [DateTime]::UtcNow.AddMilliseconds(2000)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $pbfPath -PathType Leaf) { $bootstrapped = $true; break }
+        Start-Sleep -Milliseconds 50
+    }
+    if (-not $bootstrapped) {
+        throw "Bootstrap failed: this PotPlayer build did not persist the first automated Add to a file with no prior " +
+            "`.pbf` (a known quirk of driving Skip Setup out-of-process - see this folder's README). Add one skip " +
+            "range to '$TestVideoPath' by hand once - press Alt+[, then Alt+], then Alt+A while it's playing, or use " +
+            "Skip Setup's own Add... yourself - then re-run this suite. Real hotkeys do not have this limitation."
+    }
+    Write-Host "Bootstrap succeeded - baseline range established."
+}
+
 try {
+    # Every scenario below adds ON TOP of whatever's already on the file
+    # (the pre-existing content backed up above, or this run's own
+    # bootstrap range) rather than clearing first - see this script's own
+    # "Bootstrap" section for why starting an Add from a verified-empty
+    # list can't be driven reliably by this suite's own automation. Clear
+    # is exercised exactly once, last, with nothing added afterward.
+    $baselineCount = 0
+    Invoke-WithSkipSetupDialog {
+        param($dialog)
+        $script:baselineCount = Get-SkipSetupRangeCount -Dialog $dialog
+    }
+    Write-Host "Baseline range count on this file: $baselineCount"
+
     # -----------------------------------------------------------------
     # Scenario: add one range via the dialog-driving primitives with a
-    # known, exact timestamp, and assert the .pbf matches millisecond-exact
-    # (PTS-018's first acceptance criterion).
+    # known, exact timestamp, and assert it lands in the .pbf
+    # millisecond-exact (PTS-018's first acceptance criterion).
     # -----------------------------------------------------------------
-    $firstRange = [PSCustomObject]@{ StartMs = 12000; EndMs = 34567 }
-    Test-Case "Add via Skip Setup with a known timestamp -> .pbf matches millisecond-exact" {
+    $firstRange = [PSCustomObject]@{ StartMs = 3000; EndMs = 5567 }
+    Test-Case -Retries 2 -Name "Add via Skip Setup with a known timestamp -> .pbf matches millisecond-exact" -Body {
         Invoke-WithSkipSetupDialog {
             param($dialog)
-            Clear-SkipSetupRanges -Dialog $dialog
             [void](Set-SkipSetupEnabled -Dialog $dialog)
             [void](Add-SkipSetupRange -Dialog $dialog -StartMs $firstRange.StartMs -EndMs $firstRange.EndMs)
             Close-SkipSetupDialog -Dialog $dialog -Ok
         }
-        Assert-PbfRangesMatch -Expected @($firstRange) -PbfPath $pbfPath -Message ".pbf after first Add"
+        Assert-PbfContainsRanges -ExpectedPresent @($firstRange) -ExpectedCount ($baselineCount + 1) -PbfPath $pbfPath -Message ".pbf after first Add"
     }
 
     # -----------------------------------------------------------------
     # Scenario: additive - a second Add tops up rather than replacing.
     # -----------------------------------------------------------------
-    $secondRange = [PSCustomObject]@{ StartMs = 100000; EndMs = 105250 }
-    Test-Case "A second Add tops up (additive), both ranges present and exact" {
+    $secondRange = [PSCustomObject]@{ StartMs = 8000; EndMs = 10250 }
+    Test-Case -Retries 2 -Name "A second Add tops up (additive), both ranges present and exact" -Body {
         Invoke-WithSkipSetupDialog {
             param($dialog)
-            Assert-Equal 1 (Get-SkipSetupRangeCount -Dialog $dialog) "range count before second Add"
+            Assert-Equal ($baselineCount + 1) (Wait-SkipSetupRangeCount -Dialog $dialog -Expected ($baselineCount + 1)) "range count before second Add"
             [void](Add-SkipSetupRange -Dialog $dialog -StartMs $secondRange.StartMs -EndMs $secondRange.EndMs)
             Close-SkipSetupDialog -Dialog $dialog -Ok
         }
-        Assert-PbfRangesMatch -Expected @($firstRange, $secondRange) -PbfPath $pbfPath -Message ".pbf after additive second Add"
-    }
-
-    # -----------------------------------------------------------------
-    # Scenario: clear-all deletes the whole .pbf file, not just empties it
-    # (docs/FINDINGS.md section 1: "when the last entry is deleted... the
-    # whole .pbf file is deleted, not left empty").
-    # -----------------------------------------------------------------
-    Test-Case "Clear removes all ranges -> .pbf file is deleted, not emptied" {
-        Invoke-WithSkipSetupDialog {
-            param($dialog)
-            Assert-Equal 2 (Get-SkipSetupRangeCount -Dialog $dialog) "range count before clear"
-            Clear-SkipSetupRanges -Dialog $dialog
-            Assert-Equal 0 (Get-SkipSetupRangeCount -Dialog $dialog) "range count after clear (in-dialog)"
-            Close-SkipSetupDialog -Dialog $dialog -Ok
-        }
-        # Same Close-SkipSetupDialog-doesn't-wait-for-the-file-write race
-        # Assert-PbfRangesMatch polls for above, just for "file is gone"
-        # instead of "file matches."
-        $deadline = [DateTime]::UtcNow.AddMilliseconds(1000)
-        while ((Test-Path -LiteralPath $pbfPath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
-            Start-Sleep -Milliseconds 25
-        }
-        Assert-True (-not (Test-Path -LiteralPath $pbfPath -PathType Leaf)) ".pbf should no longer exist after clearing the last range"
+        Assert-PbfContainsRanges -ExpectedPresent @($firstRange, $secondRange) -ExpectedCount ($baselineCount + 2) -PbfPath $pbfPath -Message ".pbf after additive second Add"
     }
 
     # -----------------------------------------------------------------
@@ -227,8 +304,8 @@ try {
     # correctly (PTS-012's "a range added while it's off would silently
     # never skip anything" concern).
     # -----------------------------------------------------------------
-    $guardRange = [PSCustomObject]@{ StartMs = 5000; EndMs = 9000 }
-    Test-Case "Enable-skip guard: turning the checkbox off, then Set-SkipSetupEnabled turns it back on" {
+    $guardRange = [PSCustomObject]@{ StartMs = 15000; EndMs = 17000 }
+    Test-Case -Retries 2 -Name "Enable-skip guard: turning the checkbox off, then Set-SkipSetupEnabled turns it back on" -Body {
         Invoke-WithSkipSetupDialog {
             param($dialog)
             if (Get-SkipSetupEnabled -Dialog $dialog) {
@@ -243,15 +320,34 @@ try {
             [void](Add-SkipSetupRange -Dialog $dialog -StartMs $guardRange.StartMs -EndMs $guardRange.EndMs)
             Close-SkipSetupDialog -Dialog $dialog -Ok
         }
-        Assert-PbfRangesMatch -Expected @($guardRange) -PbfPath $pbfPath -Message ".pbf after enable-guard Add"
+        Assert-PbfContainsRanges -ExpectedPresent @($guardRange) -ExpectedCount ($baselineCount + 3) -PbfPath $pbfPath -Message ".pbf after enable-guard Add"
     }
 
-    # Reset to empty before the hotkey-gesture test, so its own assertions
-    # aren't entangled with the guard-test range above.
-    Invoke-WithSkipSetupDialog {
-        param($dialog)
-        Clear-SkipSetupRanges -Dialog $dialog
-        Close-SkipSetupDialog -Dialog $dialog -Ok
+    # -----------------------------------------------------------------
+    # Scenario: clear-all deletes the whole .pbf file, not just empties it
+    # (docs/FINDINGS.md section 1: "when the last entry is deleted... the
+    # whole .pbf file is deleted, not left empty"). Runs LAST among the
+    # automation-driven scenarios - nothing after this adds anything via
+    # SkipSetupAutomation.psm1, since a subsequent Add from this
+    # now-verified-empty list would hit the same quirk the bootstrap step
+    # exists to route around.
+    # -----------------------------------------------------------------
+    Test-Case -Retries 2 -Name "Clear removes all ranges -> .pbf file is deleted, not emptied" -Body {
+        Invoke-WithSkipSetupDialog {
+            param($dialog)
+            Assert-Equal ($baselineCount + 3) (Wait-SkipSetupRangeCount -Dialog $dialog -Expected ($baselineCount + 3)) "range count before clear"
+            Clear-SkipSetupRanges -Dialog $dialog
+            Assert-Equal 0 (Get-SkipSetupRangeCount -Dialog $dialog) "range count after clear (in-dialog)"
+            Close-SkipSetupDialog -Dialog $dialog -Ok
+        }
+        # Same Close-SkipSetupDialog-doesn't-wait-for-the-file-write race
+        # Assert-PbfContainsRanges polls for above, just for "file is gone"
+        # instead of "file matches."
+        $deadline = [DateTime]::UtcNow.AddMilliseconds(1000)
+        while ((Test-Path -LiteralPath $pbfPath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Milliseconds 25
+        }
+        Assert-True (-not (Test-Path -LiteralPath $pbfPath -PathType Leaf)) ".pbf should no longer exist after clearing the last range"
     }
 
     # -----------------------------------------------------------------
@@ -297,7 +393,7 @@ try {
                 Write-Host "       (playback position did not advance between Alt+[ and Alt+] - paused test clip? this is expected to no-op, not fail)" -ForegroundColor Yellow
             } else {
                 Assert-Equal ($countBefore + 1) $countAfter "range count should go up by exactly one after Alt+[ Alt+] Alt+A"
-                Assert-PbfRangesMatch -Expected @([PSCustomObject]@{ StartMs = $posAfterStart; EndMs = $posAfterEnd }) -PbfPath $pbfPath `
+                Assert-PbfContainsRanges -ExpectedPresent @([PSCustomObject]@{ StartMs = $posAfterStart; EndMs = $posAfterEnd }) -ExpectedCount $countAfter -PbfPath $pbfPath `
                     -Message ".pbf after the hotkey-gesture commit"
             }
 

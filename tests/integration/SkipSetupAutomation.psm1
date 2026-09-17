@@ -26,7 +26,17 @@
 
 Set-StrictMode -Version Latest
 
-Import-Module (Join-Path $PSScriptRoot 'Win32Interop.psm1') -Force
+# No -Force here: this module is itself re-imported with -Force by callers
+# (e.g. Run-IntegrationTests.ps1), and Import-Module -Force on an
+# already-loaded dependency from INSIDE another module strips that
+# dependency's functions back out of the caller's global session (a real
+# PowerShell gotcha, confirmed live: Win32Interop's own exports vanished
+# from the session the moment this module's import of it used -Force,
+# even though the top-level script had already imported Win32Interop
+# directly moments before). Plain Import-Module is idempotent when the
+# module's already loaded by this same path, so this only actually loads
+# it the first time - which is all a dependency needs.
+Import-Module (Join-Path $PSScriptRoot 'Win32Interop.psm1')
 
 # Control ids, straight out of plugin/include/plugin/skip_setup.hpp.
 $script:kMainWindowClass = 'PotPlayer64'
@@ -135,6 +145,19 @@ function Open-SkipSetupDialog {
             throw "Open-SkipSetupDialog: Skip Setup opened but control '$prop' was not found - layout mismatch (see docs/REVERIFICATION_CHECKLIST.md)"
         }
     }
+
+    # Confirmed live (repeatedly) that a freshly-found dialog's range list
+    # can read back LVM_GETITEMCOUNT == 0 - genuinely STABLY, for a whole
+    # settle window, not just a flicker - before PotPlayer's own
+    # WM_INITDIALOG finishes populating the ListView from its true
+    # in-memory list. A same-process "did two reads agree" check can't
+    # tell "stably wrong" apart from "stably right" without knowing what
+    # the right answer should be, so that responsibility belongs to the
+    # caller: use Wait-SkipSetupRangeCount below when a specific count is
+    # expected here, rather than trusting Get-SkipSetupRangeCount's first
+    # read right after an open.
+    Start-Sleep -Milliseconds 150
+
     return $controls
 }
 
@@ -149,6 +172,16 @@ function Close-SkipSetupDialog {
     if ($Cancel) {
         [void](Send-WmCommandClick -WindowHandle $Dialog.Hwnd -Id $script:kCancelButtonId -ControlHandle $Dialog.CancelButton)
     } else {
+        # Settle delay before OK only (never needed for Cancel, which
+        # persists nothing). Confirmed live: this automation, run with no
+        # delay at all between the preceding Add/checkbox-toggle and this
+        # click, intermittently failed to persist even a routine top-up
+        # add (not just the empty-list case) - a real human's own
+        # click-then-click pacing never hits this, only a script firing
+        # PostMessage calls back-to-back does. Not root-caused further
+        # (would need a debugger attached to PotPlayer itself); this is a
+        # pragmatic mitigation, not a fix for a understood cause.
+        Start-Sleep -Milliseconds 200
         [void](Send-WmCommandClick -WindowHandle $Dialog.Hwnd -Id $script:kOkButtonId -ControlHandle $Dialog.OkButton)
     }
     if (-not (Wait-WindowGone -Handle $Dialog.Hwnd -TimeoutMs $TimeoutMs)) {
@@ -160,6 +193,36 @@ function Get-SkipSetupRangeCount {
     [CmdletBinding()]
     param([Parameter(Mandatory)][PSCustomObject]$Dialog)
     return Get-ListViewItemCount -ListHandle $Dialog.RangeList
+}
+
+function Wait-SkipSetupRangeCount {
+    <#
+    .SYNOPSIS
+    Polls Get-SkipSetupRangeCount until it reaches `Expected` or the
+    timeout elapses, returning whatever the last read was either way.
+
+    .DESCRIPTION
+    Prefer this over a single Get-SkipSetupRangeCount call whenever the
+    caller already knows what count to expect (which every precondition
+    check in this suite does) - a single immediate read has been observed
+    live to be genuinely, stably wrong (not just a one-frame flicker) for
+    up to roughly a second after a fresh Open-SkipSetupDialog, apparently
+    while PotPlayer's own WM_INITDIALOG is still populating the ListView.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][PSCustomObject]$Dialog,
+        [Parameter(Mandatory)][int]$Expected,
+        [int]$TimeoutMs = 2000,
+        [int]$PollIntervalMs = 100
+    )
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $count = Get-SkipSetupRangeCount -Dialog $Dialog
+    while ($count -ne $Expected -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds $PollIntervalMs
+        $count = Get-SkipSetupRangeCount -Dialog $Dialog
+    }
+    return $count
 }
 
 function Get-SkipSetupEnabled {
@@ -181,6 +244,7 @@ function Set-SkipSetupEnabled {
 
     if (Get-SkipSetupEnabled -Dialog $Dialog) { return $true }
     Invoke-CheckboxClick -ControlHandle $Dialog.EnableCheckbox
+    Start-Sleep -Milliseconds 100
     return (Get-SkipSetupEnabled -Dialog $Dialog)
 }
 
@@ -319,6 +383,7 @@ Export-ModuleMember -Function `
     Open-SkipSetupDialog, `
     Close-SkipSetupDialog, `
     Get-SkipSetupRangeCount, `
+    Wait-SkipSetupRangeCount, `
     Get-SkipSetupEnabled, `
     Set-SkipSetupEnabled, `
     Add-SkipSetupRange, `

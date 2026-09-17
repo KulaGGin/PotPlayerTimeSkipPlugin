@@ -97,15 +97,35 @@ public struct INPUT {
     public InputUnion U;
 }
 
+// MOUSEINPUT (32 bytes on x64) must be declared here even though this
+// module only ever sends keyboard input: SendInput validates its cbSize
+// argument against the TRUE native sizeof(INPUT), which is sized by the
+// union's LARGEST member. MOUSEINPUT (32 bytes) is bigger than KEYBDINPUT
+// (24 bytes), so a union declared with only KEYBDINPUT makes the whole
+// INPUT struct 8 bytes too small (32 instead of the real 40) - confirmed
+// live: SendInput rejected every call outright (0 of N accepted,
+// ERROR_INVALID_PARAMETER) until this field was added, even though the
+// KEYBDINPUT values themselves were always correct.
 [StructLayout(LayoutKind.Explicit)]
 public struct InputUnion {
     [FieldOffset(0)] public KEYBDINPUT ki;
+    [FieldOffset(0)] public MOUSEINPUT mi;
 }
 
 [StructLayout(LayoutKind.Sequential)]
 public struct KEYBDINPUT {
     public ushort wVk;
     public ushort wScan;
+    public uint dwFlags;
+    public uint time;
+    public IntPtr dwExtraInfo;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct MOUSEINPUT {
+    public int dx;
+    public int dy;
+    public uint mouseData;
     public uint dwFlags;
     public uint time;
     public IntPtr dwExtraInfo;
@@ -146,9 +166,22 @@ $script:KEYEVENTF_KEYUP = 0x0002
 $script:VK_MENU = 0x12    # Alt
 
 function Find-WindowByClass {
+    <#
+    .SYNOPSIS
+    FindWindow by class, any title.
+
+    .DESCRIPTION
+    Passes [NullString]::Value, not $null, for lpWindowName. Confirmed live
+    (against a real PotPlayer window) that plain $null silently marshals to
+    an EMPTY STRING across this P/Invoke boundary rather than a true null
+    pointer - so FindWindow(class, $null) actually searches for a window
+    with that class AND an empty title, which never matches anything real,
+    and always returns 0. [NullString]::Value is .NET's documented escape
+    hatch for exactly this PowerShell/interop ambiguity.
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$ClassName)
-    $h = [PotPlayerTimeSkip.Win32]::FindWindow($ClassName, $null)
+    $h = [PotPlayerTimeSkip.Win32]::FindWindow($ClassName, [NullString]::Value)
     if ($h -eq [IntPtr]::Zero) { return $null }
     return $h
 }
@@ -375,8 +408,13 @@ function Select-ListViewItem {
         # 96 bytes covers the full struct with room to spare; only the
         # first 20 bytes are ever meaningfully written since mask =
         # LVIF_STATE (state-only update).
+        # [UIntPtr]<int32> fails outright in this PowerShell version
+        # ("Cannot convert... System.Int32 to type System.UIntPtr" -
+        # confirmed live, no implicit/explicit converter PowerShell's type
+        # coercion recognizes for that pair); routing through [uint64]
+        # first is what actually works.
         $bufSize = 96
-        $remote = [PotPlayerTimeSkip.Win32]::VirtualAllocEx($hProcess, [IntPtr]::Zero, [UIntPtr]$bufSize, ($script:MEM_COMMIT -bor $script:MEM_RESERVE), $script:PAGE_READWRITE)
+        $remote = [PotPlayerTimeSkip.Win32]::VirtualAllocEx($hProcess, [IntPtr]::Zero, [UIntPtr][uint64]$bufSize, ($script:MEM_COMMIT -bor $script:MEM_RESERVE), $script:PAGE_READWRITE)
         if ($remote -eq [IntPtr]::Zero) { throw "Select-ListViewItem: VirtualAllocEx failed, gle=$([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
 
         try {
@@ -388,12 +426,19 @@ function Select-ListViewItem {
             [BitConverter]::GetBytes([uint32]$StateMask).CopyTo($buf, 16)
 
             $written = [UIntPtr]::Zero
-            $ok = [PotPlayerTimeSkip.Win32]::WriteProcessMemory($hProcess, $remote, $buf, [UIntPtr]$bufSize, [ref]$written)
+            $ok = [PotPlayerTimeSkip.Win32]::WriteProcessMemory($hProcess, $remote, $buf, [UIntPtr][uint64]$bufSize, [ref]$written)
             if (-not $ok) { throw "Select-ListViewItem: WriteProcessMemory failed, gle=$([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
 
-            [void][PotPlayerTimeSkip.Win32]::SendMessage($ListHandle, $script:LVM_SETITEMSTATE, [IntPtr](-1), $remote)
+            # wParam is the item index LVM_SETITEMSTATE applies to (-1
+            # meaning "every item", exactly like the ListView_SetItemState
+            # macro's own first argument in skip_setup.cpp) - NOT always
+            # -1 regardless of $Index. That was a real, confirmed-live bug:
+            # every call, including "select item 0," was broadcasting to
+            # the whole list, and item 0's state never actually changed as
+            # a result (LVM_GETITEMSTATE read back 0/unselected afterward).
+            [void][PotPlayerTimeSkip.Win32]::SendMessage($ListHandle, $script:LVM_SETITEMSTATE, [IntPtr]$Index, $remote)
         } finally {
-            [void][PotPlayerTimeSkip.Win32]::VirtualFreeEx($hProcess, $remote, [UIntPtr]0, $script:MEM_RELEASE)
+            [void][PotPlayerTimeSkip.Win32]::VirtualFreeEx($hProcess, $remote, [UIntPtr]::Zero, $script:MEM_RELEASE)
         }
     } finally {
         [void][PotPlayerTimeSkip.Win32]::CloseHandle($hProcess)

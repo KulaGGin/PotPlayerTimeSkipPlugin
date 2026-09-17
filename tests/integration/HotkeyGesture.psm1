@@ -21,7 +21,10 @@
 
 Set-StrictMode -Version Latest
 
-Import-Module (Join-Path $PSScriptRoot 'Win32Interop.psm1') -Force
+# No -Force: see SkipSetupAutomation.psm1's own comment on this same line -
+# a nested Import-Module -Force on an already-loaded dependency strips its
+# exports back out of the caller's global session.
+Import-Module (Join-Path $PSScriptRoot 'Win32Interop.psm1')
 
 # plugin/include/plugin/hotkeys.hpp's VK_* constants (US layout).
 $script:kVkA = 0x41

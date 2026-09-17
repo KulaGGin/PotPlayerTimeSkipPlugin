@@ -15,3 +15,7 @@
 # Local-only artifacts — never commit real PotPlayer files or personal data
 *_orig.dll
 *.reg
+
+# PTS-018 integration suite: throwaway local test media/sidecars, never checked in
+tests/integration/*.mp4
+tests/integration/*.pbf
